@@ -22,5 +22,5 @@ infer（推理）+ loop（循环）。
 
 ## 联系
 
-- 公众号：递归客（即将开通）
+- 公众号：AI Reading Hub
 - GitHub：[github.com/inferloop](https://github.com/inferloop)

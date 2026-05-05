@@ -115,14 +115,16 @@ function processMarkdown(content: string): string {
   return removeFrontmatter(content);
 }
 
-function generateMetaJson(
+function generateMetaTs(
   chapters: Array<{ slug: string; title: string }>
 ): string {
-  const obj: Record<string, string> = { index: '简介' };
+  const lines = ["export default {", "  index: '简介',"];
   for (const ch of chapters) {
-    obj[ch.slug] = ch.title;
+    const escaped = ch.title.replace(/'/g, "\\'");
+    lines.push(`  '${ch.slug}': '${escaped}',`);
   }
-  return JSON.stringify(obj, null, 2) + '\n';
+  lines.push('};\n');
+  return lines.join('\n');
 }
 
 function syncBook(config: BookConfig): void {
@@ -188,10 +190,10 @@ function syncBook(config: BookConfig): void {
     }
   }
 
-  // 生成 _meta.json
-  const metaPath = path.join(targetBase, '_meta.json');
-  fs.writeFileSync(metaPath, generateMetaJson(chapters), 'utf-8');
-  console.log(`  [META] _meta.json (${chapters.length} chapters)`);
+  // 生成 _meta.ts（Nextra v4 不支持 _meta.json）
+  const metaPath = path.join(targetBase, '_meta.ts');
+  fs.writeFileSync(metaPath, generateMetaTs(chapters), 'utf-8');
+  console.log(`  [META] _meta.ts (${chapters.length} chapters)`);
 }
 
 // Main

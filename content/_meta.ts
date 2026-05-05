@@ -1,0 +1,31 @@
+export default {
+  index: {
+    title: '首页',
+    type: 'page',
+    display: 'hidden',
+  },
+  'llm-infra': {
+    title: 'LLM Infra 工程实战',
+    type: 'page',
+  },
+  'hermes-agent': {
+    title: 'Hermes Agent 源码解读',
+    type: 'page',
+  },
+  openclaw: {
+    title: 'OpenClaw 源码解析',
+    type: 'page',
+  },
+  'claude-skill': {
+    title: 'Claude Code Skill 指南',
+    type: 'page',
+  },
+  'claude-plugins': {
+    title: 'Claude 插件官方指南',
+    type: 'page',
+  },
+  about: {
+    title: '关于',
+    type: 'page',
+  },
+};

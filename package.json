@@ -4,9 +4,9 @@
   "description": "InferLoop - 工程师写给工程师的 AI Infra 深度内容",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --webpack",
     "sync": "tsx scripts/sync-from-books.ts",
-    "build": "npm run sync && next build",
+    "build": "npm run sync && NEXT_WEBPACK_MAX_WORKERS=1 NODE_OPTIONS=--max-old-space-size=3072 next build",
     "start": "next start",
     "export": "npm run build",
     "postinstall": "patch-package"
