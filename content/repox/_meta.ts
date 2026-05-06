@@ -1,0 +1,17 @@
+export default {
+  index: { title: '简介', display: 'hidden' },
+  'chapter-01': '第 1 章：从浏览器到终端',
+  'chapter-02': '第 2 章：命令设计的艺术',
+  'chapter-03': '第 3 章：交互式体验',
+  'chapter-04': '第 4 章 输出的艺术',
+  'chapter-05': '第 5 章 配置管理',
+  'chapter-06': '第 6 章 登录鉴权',
+  'chapter-07': '第 7 章 网络请求',
+  'chapter-08': '第 8 章 接入大模型 -- 基础能力',
+  'chapter-09': '第 9 章 AI Agent 模式 -- 进阶能力',
+  'chapter-10': '第 10 章 错误处理与调试',
+  'chapter-11': '第 11 章 测试与发布',
+  'chapter-12': '第 12 章 插件系统设计',
+  'chapter-13': '第 13 章：Ink + React — 组件化终端界面',
+  'chapter-14': '第 14 章：面向未来 — CLI 作为 AI 基础设施',
+};

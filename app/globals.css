@@ -537,6 +537,26 @@ body {
   font-size: 0.95rem;
 }
 
+.il-author-contact {
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.il-author-contact-label {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--il-text-mute);
+}
+
+.il-author-qrcode {
+  width: 120px;
+  height: 120px;
+  border-radius: 6px;
+  border: 1px solid var(--il-border);
+}
+
 /* ---------- 移动端 ---------- */
 @media (max-width: 768px) {
   .il-home {

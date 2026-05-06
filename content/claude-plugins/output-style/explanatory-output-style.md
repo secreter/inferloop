@@ -1,0 +1,91 @@
+# explanatory-output-style：教学解释输出风格
+
+让 Claude 在写代码时附带简短的教学解释——关于实现选择、代码库模式的 insight 说明，通过一个 SessionStart hook 注入系统提示来实现。
+
+## 技术原理
+
+这个插件的实现方式是所有插件里最简单的一种：一个 shell 脚本，在 session 启动时往 Claude 的上下文里注入一段额外指令。
+
+`hooks.json` 注册了一个 `SessionStart` hook，触发时执行 `hooks-handlers/session-start.sh`。这个 shell 脚本做的事情就是 `cat` 一段 JSON 到 stdout：
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "SessionStart",
+    "additionalContext": "You are in 'explanatory' output style mode..."
+  }
+}
+```
+
+`additionalContext` 的内容会被注入到 Claude 的系统提示中，从此之后整个 session 的行为都受这段指令影响。
+
+指令的核心要求是：在写代码前后，插入用特殊格式标记的教学说明块：
+
+```
+`★ Insight ─────────────────────────────────────`
+[2-3 个要点]
+`─────────────────────────────────────────────────`
+```
+
+对 insight 内容的约束：
+
+- 聚焦于代码库特有的模式或刚写代码的实现细节，不讲通用编程概念
+- 在写代码的过程中穿插提供，不要攒到最后一起说
+- 可以超出通常的输出长度限制，但要跟任务相关
+- 平衡教学内容和任务完成——教学是附加的，不能喧宾夺主
+
+这个插件的名字带了 "mimics the deprecated Explanatory output style"，说明它复刻的是 Claude 早期版本中一个已废弃的内置输出风格。现在通过插件机制把这个能力还原了。
+
+## 安装与配置
+
+```bash
+/plugin install explanatory-output-style@claude-plugins-official
+```
+
+零配置。装上即生效，每次启动 session 自动激活。
+
+要临时关闭，卸载插件：
+
+```bash
+claude plugin remove explanatory-output-style
+```
+
+没有运行时开关，做不到"这次 session 不要 insight"。
+
+## 使用方法
+
+装好后正常用 Claude 就行。你不需要做任何额外操作。
+
+当你让 Claude 写代码时，它会在输出中穿插 insight 块。比如你让它实现一个缓存功能，输出可能是这样的：
+
+```
+`★ Insight ─────────────────────────────────────`
+这里用 Map 而非普通对象做缓存，因为 Map 的键可以是任意类型，
+且 Map 在频繁增删场景下性能更好——V8 对 Map 做了哈希表优化，
+而普通对象的属性访问走的是隐藏类机制，频繁增删会导致去优化。
+`─────────────────────────────────────────────────`
+```
+
+然后是代码，然后可能又跟一段关于代码设计选择的 insight。
+
+## 使用场景
+
+**带新人熟悉代码库**。新人加入团队，让 Claude 帮他改代码时开着这个插件。Claude 在写代码的同时会解释为什么这样写——不是教基础语法，而是解释这个项目特有的模式和约定。比如"这个项目用 barrel exports 组织模块"、"这个 factory 函数的模式在代码库里出现了 12 次，是约定俗成的写法"。
+
+**学习不熟悉的技术栈**。你要在一个 Rust 项目里加功能，对 Rust 的所有权系统不太熟。Claude 写代码时会顺带解释为什么这里用 `&str` 而不是 `String`，为什么这个函数要求 `'static` 生命周期。
+
+**代码审查学习**。Review 别人的代码时让 Claude 解释改动，它会在分析的同时提供关于设计选择的 insight。
+
+**个人知识积累**。日常用 Claude 写代码时保持开着，偶尔能学到一些关于所用框架或库的内部机制。不是每条 insight 都有用，但时间长了积累不少。
+
+## 局限与注意事项
+
+**输出变长**。每段代码前后多一个 insight 块，输出量明显增大。如果你在赶进度只想快速拿到代码，这些 insight 是噪音。
+
+**insight 质量不稳定**。指令要求"focus on interesting insights specific to the codebase"，但实际上 Claude 经常退化成讲通用概念——"TypeScript 的类型推导是结构化的"这种谁都知道的东西。控制 insight 质量完全靠 prompt 约束，没有反馈机制。
+
+**没有开关，只有装/卸载**。想临时关掉只能卸载插件。如果能支持一个环境变量开关，或者在 session 中说"关掉 insight"就能切换，会方便很多。
+
+**跟 learning-output-style 冲突**。下一节讲的 `learning-output-style` 插件里包含了完整的 explanatory 功能。两个同时装会导致重复的 insight 指令注入，效果不可预测。选一个装就行。
+
+**不影响工具使用，只影响对话输出**。这个插件不改变 Claude 用什么工具、怎么执行任务，只改变它在对话中怎么说话。代码本身不会被插入 insight 注释——insight 只出现在 Claude 的对话文本里。

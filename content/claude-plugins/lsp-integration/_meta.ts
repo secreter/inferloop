@@ -1,0 +1,15 @@
+export default {
+  'lsp-overview': 'LSP 集成概述与通用原理',
+  'typescript-lsp': 'TypeScript LSP',
+  'pyright-lsp': 'Pyright LSP',
+  'gopls-lsp': 'gopls LSP',
+  'rust-analyzer-lsp': 'rust-analyzer LSP',
+  'clangd-lsp': 'clangd LSP',
+  'jdtls-lsp': 'jdtls LSP（Java）',
+  'kotlin-lsp': 'Kotlin LSP',
+  'csharp-lsp': 'C# LSP',
+  'ruby-lsp': 'Ruby LSP',
+  'php-lsp': 'PHP LSP',
+  'swift-lsp': 'Swift LSP',
+  'lua-lsp': 'Lua LSP',
+};

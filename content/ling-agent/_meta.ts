@@ -1,0 +1,17 @@
+export default {
+  index: { title: '简介', display: 'hidden' },
+  'preface': '前言 · 先看最终效果',
+  'first-agent': '50 行代码，你的第一个 Agent',
+  'multi-provider': '第2章 多模型适配——一套代码跑通三家 LLM',
+  'tool-system': '第3章 工具系统——给 Agent 装上瑞士军刀',
+  'context-engineering': '上下文工程——比 Prompt Engineering 更重要的事',
+  'permission-security': '权限与安全——Agent 开发的第一优先级',
+  'streaming': '流式交互——边想边说的用户体验',
+  'session-memory': '会话与记忆——记住上次聊到哪了',
+  'hooks': '第 8 章 · Hook 系统：Agent 生命周期的扩展点',
+  'mcp': '第 9 章 · MCP：一个协议连接所有工具',
+  'multi-agent': '第 10 章 · 多 Agent 协作——一个不够就来一群',
+  'production': '第 11 章 · 从 CLI 到生产——非交互模式与 CI/CD',
+  'finale': '终章 · 从 Ling 到真实世界',
+  'claude-code-deep-dive': '第 12 章 · 深入 Claude Code 源码',
+};

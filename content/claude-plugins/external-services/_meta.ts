@@ -1,0 +1,18 @@
+export default {
+  'github': '6.1 GitHub',
+  'gitlab': '6.2 GitLab',
+  'linear': '6.3 Linear',
+  'asana': '6.4 Asana',
+  'supabase': '6.5 Supabase',
+  'firebase': '6.6 Firebase',
+  'terraform': '6.7 Terraform',
+  'playwright': '6.8 Playwright',
+  'discord': '6.9 Discord',
+  'telegram': '6.10 Telegram',
+  'imessage': '6.11 iMessage',
+  'greptile': '6.12 Greptile',
+  'laravel-boost': '6.13 Laravel Boost',
+  'context7': '6.14 Context7',
+  'serena': '6.15 Serena',
+  'fakechat': '6.16 Fakechat',
+};

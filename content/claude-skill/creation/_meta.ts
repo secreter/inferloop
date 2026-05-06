@@ -1,0 +1,15 @@
+export default {
+  'intro-explain-code': '5 分钟，你的第一个 Skill',
+  'structure-and-config': 'Skill 的结构与配置',
+  'description-trigger': 'Description 的触发艺术',
+  'instruction-writing': '指令编写的心法',
+  'dynamic-context': '动态上下文注入',
+  'knowledge-inline-vs-external': '知识的内置与外置',
+  'pluggable-rules': '插件化规则体系',
+  'scripts-in-skill': '在 Skill 中编写脚本',
+  'log-scoring-trend': '审查日志、自评分与质量追踪',
+  'hooks': 'Hooks：Skill 的行为钩子',
+  'subagent-and-fork': '子代理与协作执行',
+  'debugging': '调试与排障',
+  'skill-composition': 'Skill 组合与编排',
+};

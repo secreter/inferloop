@@ -1,0 +1,15 @@
+export default {
+  'example-plugin': 'example-plugin：插件开发的脚手架参考',
+  'claude-code-setup': 'claude-code-setup：项目自动化配置推荐器',
+  'claude-md-management': 'claude-md-management：CLAUDE.md 维护工具',
+  'commit-commands': 'commit-commands：Git 工作流一键化',
+  'feature-dev': 'feature-dev：结构化功能开发工作流',
+  'plugin-dev': 'plugin-dev：插件开发工具箱',
+  'skill-creator': 'skill-creator：Skill 创建与迭代优化',
+  'mcp-server-dev': 'mcp-server-dev：MCP 服务器开发向导',
+  'agent-sdk-dev': 'agent-sdk-dev：Agent SDK 项目脚手架与验证',
+  'hookify': 'hookify：用 Markdown 配置 Claude Code 的行为拦截规则',
+  'playground': 'playground：生成独立的交互式 HTML 探索工具',
+  'ralph-loop': 'ralph-loop：让 Claude 在同一个 prompt 上反复迭代直到完成',
+  'session-report': 'session-report：Claude Code 使用量的可视化分析报告',
+};
