@@ -1,0 +1,23 @@
+# Cloudflare Pages — 边缘 HTTP 头规则
+# 部署时这个文件会被原样复制到 out/ 根目录，由 CF Pages 自动读取。
+
+/*
+  X-Frame-Options: SAMEORIGIN
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: interest-cohort=(), camera=(), microphone=(), geolocation=()
+  Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+
+# Next 生成的静态资源带 hash，安全长缓存
+/_next/static/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# 字体 / 图片 等 public 资源
+/favicon.svg
+  Cache-Control: public, max-age=86400
+
+# SEO 文件：1 小时缓存，方便修改快速生效
+/sitemap.xml
+  Cache-Control: public, max-age=3600
+/robots.txt
+  Cache-Control: public, max-age=3600

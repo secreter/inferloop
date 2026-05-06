@@ -23,4 +23,4 @@ infer（推理）+ loop（循环）。
 ## 联系
 
 - 公众号：AI Reading Hub
-- GitHub：[github.com/inferloop](https://github.com/inferloop)
+- 飞书知识库：[在这里和我交流 / 提问 / 反馈](https://fivwvysqdz.feishu.cn/wiki/space/7625711311279623122?ccm_open_type=lark_wiki_spaceLink&open_tab_from=wiki_home)

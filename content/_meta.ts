@@ -1,8 +1,18 @@
 export default {
   index: {
-    title: '首页',
     type: 'page',
+    title: '首页',
     display: 'hidden',
+    theme: {
+      layout: 'full',
+      sidebar: false,
+      toc: false,
+      timestamp: false,
+      breadcrumb: false,
+      pagination: false,
+      typesetting: 'default',
+      copyPage: false,
+    },
   },
   'llm-infra': {
     title: 'LLM Infra 工程实战',
@@ -27,5 +37,13 @@ export default {
   about: {
     title: '关于',
     type: 'page',
+    theme: {
+      sidebar: false,
+      toc: false,
+      timestamp: false,
+      breadcrumb: false,
+      pagination: false,
+      copyPage: false,
+    },
   },
 };
