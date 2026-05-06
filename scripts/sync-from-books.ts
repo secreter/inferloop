@@ -167,6 +167,12 @@ function stripNumericPrefix(slug: string): string {
   return stripped || slug;
 }
 
+// 剥除各种"第X章"前缀变体，保证每本书侧边栏标题风格一致
+// 处理: "第2章 "、"第 8 章 · "、"第 10 章 — "、"第 1 章："等
+function normalizeChapterTitle(title: string): string {
+  return title.replace(/^第\s*\d+\s*章\s*[·:：—\-]*\s*/, '').trim() || title;
+}
+
 // "01-cognition" → "Cognition"，"01-dev-tools" → "Dev Tools"
 function dirToTitle(dirName: string): string {
   const stripped = stripNumericPrefix(dirName);
@@ -198,7 +204,7 @@ function collectChapterDirs(
   const results: Array<{ fullPath: string; name: string }> = [];
   const entries = fs.readdirSync(dir, { withFileTypes: true })
     .filter(e => e.isDirectory() && !e.name.startsWith('.') && !e.name.startsWith('_'))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
@@ -240,7 +246,7 @@ function syncBookFlat(config: BookConfig): void {
       const readmePath = path.join(fullPath, 'README.md');
       const mdContent = fs.readFileSync(readmePath, 'utf-8');
       const slug = stripNumericPrefix(name);
-      const title = extractTitleFromContent(mdContent) || slug;
+      const title = normalizeChapterTitle(extractTitleFromContent(mdContent) || slug);
       const processed = processMarkdown(mdContent);
       fs.writeFileSync(path.join(targetBase, `${slug}.md`), processed, 'utf-8');
       chapters.push({ slug, title });
@@ -252,7 +258,7 @@ function syncBookFlat(config: BookConfig): void {
   }
 
   const entries = fs.readdirSync(chaptersDir, { withFileTypes: true })
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
   const chapters: Array<{ slug: string; title: string }> = [];
 
   for (const entry of entries) {
@@ -273,7 +279,7 @@ function syncBookFlat(config: BookConfig): void {
     }
 
     if (mdContent && slug) {
-      const title = extractTitleFromContent(mdContent) || slug;
+      const title = normalizeChapterTitle(extractTitleFromContent(mdContent) || slug);
       const processed = processMarkdown(mdContent);
       fs.writeFileSync(path.join(targetBase, `${slug}.md`), processed, 'utf-8');
       chapters.push({ slug, title });
@@ -307,7 +313,7 @@ function syncBookSections(config: BookConfig): void {
 
   const sectionEntries = fs.readdirSync(chaptersDir, { withFileTypes: true })
     .filter(e => e.isDirectory() && config.chapterPattern.test(e.name))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 
   const topSections: Array<{ slug: string; title: string }> = [];
 
@@ -321,13 +327,13 @@ function syncBookSections(config: BookConfig): void {
 
     const files = fs.readdirSync(sourceSectionDir, { withFileTypes: true })
       .filter(f => f.isFile() && f.name.endsWith('.md') && !f.name.startsWith('_'))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 
     const chapterMetas: Array<{ slug: string; title: string }> = [];
 
     for (const file of files) {
       const content = fs.readFileSync(path.join(sourceSectionDir, file.name), 'utf-8');
-      const title = extractTitleFromContent(content) || file.name.replace('.md', '');
+      const title = normalizeChapterTitle(extractTitleFromContent(content) || file.name.replace('.md', ''));
       const processed = processMarkdown(content);
       const slug = stripNumericPrefix(file.name.replace('.md', ''));
 

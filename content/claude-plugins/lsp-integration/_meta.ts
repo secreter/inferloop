@@ -1,5 +1,4 @@
 export default {
-  index: { display: 'hidden' },
   'lsp-overview': 'LSP 集成概述与通用原理',
   'typescript-lsp': 'TypeScript LSP',
   'pyright-lsp': 'Pyright LSP',
