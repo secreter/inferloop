@@ -21,8 +21,69 @@
   --il-card-bg: #ffffff;
   --il-text-mute: #4b5563;
 
-  /* 内容区接近全屏 */
-  --nextra-content-width: min(98vw, 1760px) !important;
+  /* 内容区全屏铺满，仅在超宽屏（4K+）做合理上限 */
+  --nextra-content-width: min(100vw, 2400px) !important;
+}
+
+/* 收紧 navbar / 主布局两侧 padding，最大化利用空间 */
+.nextra-navbar nav,
+.nextra-navbar > nav {
+  padding-inline: max(env(safe-area-inset-left), 1rem) max(env(safe-area-inset-right), 1rem) !important;
+}
+/* main 区域内边距适度收紧 */
+main {
+  padding-inline: clamp(1.25rem, 2.4vw, 2.75rem) !important;
+}
+
+/* 桌面端 sidebar 加宽，避免中文章节标题挤成两行 */
+@media (min-width: 768px) {
+  aside.nextra-sidebar {
+    width: 17.5rem !important;
+  }
+  aside.nextra-sidebar .nextra-scrollbar a {
+    word-break: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.45;
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Sidebar 扁平化：进入某书后只显示该书的章节
+   - 隐藏所有未展开的 book folder
+   - 软导航中可能短暂同时存在多个 .open，用兄弟选择器只保留第一个
+   - 隐藏书名按钮（顶部 menu dropdown 已是入口）
+   - 把展开的章节 ul 提到顶层，去掉嵌套缩进与组指示线
+   ────────────────────────────────────────────────────────────────────────── */
+aside.nextra-sidebar .nextra-scrollbar > div > ul.x\:grid > li:not(.open),
+aside.nextra-sidebar .nextra-scrollbar > div > ul.x\:grid > li.open ~ li.open {
+  display: none !important;
+}
+aside.nextra-sidebar .nextra-scrollbar > div > ul.x\:grid > li.open > button {
+  display: none;
+}
+/* 当前书的章节 ul：去掉缩进与左竖线，展平到顶层 */
+aside.nextra-sidebar .nextra-scrollbar > div > ul.x\:grid > li.open > ul,
+aside.nextra-sidebar .nextra-scrollbar > div > ul.x\:grid > li.open > div > ul {
+  margin-inline-start: 0 !important;
+  padding-inline-start: 0 !important;
+}
+aside.nextra-sidebar .nextra-scrollbar > div > ul.x\:grid > li.open > ul::before,
+aside.nextra-sidebar .nextra-scrollbar > div > ul.x\:grid > li.open > div > ul::before {
+  display: none !important;
+}
+
+/* 移动端 menu 内不做扁平化（用户需要看到所有 books 切换） */
+
+/* 大屏（≥1600px）再加宽 sidebar，整体更舒展 */
+@media (min-width: 1600px) {
+  aside.nextra-sidebar {
+    width: 19rem !important;
+  }
+}
+
+/* TOC 区可读性：增加左 padding，避免文字贴边；行距统一 */
+.nextra-toc a {
+  line-height: 1.55;
 }
 
 .dark {

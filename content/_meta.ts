@@ -14,46 +14,31 @@ export default {
       copyPage: false,
     },
   },
-  // 各书页面保留路由，但从顶部导航隐藏，由下方 menu 统一入口
+  // 每本书作为 doc 文件夹保留（保证 sidebar 正常渲染章节）
+  // 视觉上"书名"这一层由 CSS 隐藏（见 globals.css 中 .nextra-sidebar 区块）
   'llm-infra': {
     title: 'LLM Infra 工程实战',
-    type: 'page',
-    display: 'hidden',
   },
   'hermes-agent': {
     title: 'Hermes Agent 源码解读',
-    type: 'page',
-    display: 'hidden',
   },
   openclaw: {
     title: 'OpenClaw 源码解析',
-    type: 'page',
-    display: 'hidden',
   },
   'claude-skill': {
     title: 'Claude Code Skill 指南',
-    type: 'page',
-    display: 'hidden',
   },
   'claude-plugins': {
     title: 'Claude 插件官方指南',
-    type: 'page',
-    display: 'hidden',
   },
   'ling-agent': {
     title: '自己动手写 AI Agent',
-    type: 'page',
-    display: 'hidden',
   },
   repox: {
     title: 'AI 时代的 CLI 工具开发实战',
-    type: 'page',
-    display: 'hidden',
   },
   'claude-mem': {
     title: 'Agent Memory 工程实战',
-    type: 'page',
-    display: 'hidden',
   },
   // ── 顶部导航分组 dropdown ──────────────────────────────────────────────────
   'menu-llm': {

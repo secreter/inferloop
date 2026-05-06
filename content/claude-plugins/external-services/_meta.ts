@@ -1,4 +1,5 @@
 export default {
+  index: { display: 'hidden' },
   'github': '6.1 GitHub',
   'gitlab': '6.2 GitLab',
   'linear': '6.3 Linear',

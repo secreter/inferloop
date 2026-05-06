@@ -1,4 +1,5 @@
 export default {
+  index: { display: 'hidden' },
   'example-plugin': 'example-plugin：插件开发的脚手架参考',
   'claude-code-setup': 'claude-code-setup：项目自动化配置推荐器',
   'claude-md-management': 'claude-md-management：CLAUDE.md 维护工具',

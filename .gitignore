@@ -8,3 +8,4 @@ out/
 .env*.local
 .review/
 .wrangler/
+.debug/
