@@ -1,0 +1,123 @@
+1:"$Sreact.fragment"
+2:I[55169,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"TOCProvider"]
+3:I[769,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"Sidebar"]
+4:I[47486,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ClientWrapper"]
+9:I[63894,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"HeadingAnchor"]
+24:I[97367,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"OutletBoundary"]
+25:"$Sreact.suspense"
+27:I[83987,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ToggleWordWrapButton"]
+28:I[40493,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"CopyToClipboard"]
+5:Tce6,# 6.10 Telegram
+
+## 定位
+
+Telegram bot 消息通道插件。和 Discord 插件同一类东西——把 Telegram bot 接入 Claude Code，消息双向桥接，带访问控制。
+
+## 核心功能
+
+本地 stdio 类型 MCP 服务器，Bun 运行，底层用 [grammY](https://grammy.dev/) 框架。
+
+**暴露给 Claude 的工具：**
+
+| 工具 | 用途 |
+| --- | --- |
+| `reply` | 发送消息。支持 `reply_to` 引用、`files` 附件。图片（jpg/png/gif/webp）自动作为 photo 发送带预览，其他类型走 document。单文件最大 50MB。 |
+| `react` | 加 emoji 反应。只支持 Telegram 固定白名单里的 emoji（👍❤🔥👀 等），用别的不会报错但也不会生效。 |
+| `edit_message` | 编辑 bot 之前发送的消息。 |
+
+和 Discord 的关键区别：**没有 `fetch_messages` 工具**。Telegram Bot API 不暴露消息历史和搜索，bot 只能看到实时到达的消息。如果 Claude 需要之前的上下文，只能请你复述。
+
+**照片处理：** 收到的照片自动下载到 `~/.claude/channels/telegram/inbox/`，路径直接传给 Claude。Telegram 会压缩照片；如果需要原图，发送时选"以文件方式发送"。
+
+## 安装与配置
+
+前置条件：[Bun](https://bun.sh)
+
+**1. 创建 bot**
+
+在 Telegram 上找 [@BotFather](https://t.me/BotFather)，发 `/newbot`，按提示设置名称和用户名（必须以 `bot` 结尾）。BotFather 回复的 token 格式如 `123456789:AAHfiqksKZ8...`。
+
+**2. 安装插件**
+
+```
+/plugin install telegram@claude-plugins-official
+/reload-plugins
+```
+
+**3. 配置 token**
+
+```
+/telegram:configure 123456789:AAHfiqksKZ8...
+```
+
+写入 `~/.claude/channels/telegram/.env`。
+
+**4. 以 channel 模式启动**
+
+```bash
+claude --channels plugin:telegram@claude-plugins-official
+```
+
+**5. 配对**
+
+在 Telegram 上给 bot 发私信，收到 6 位配对码后：
+
+```
+/telegram:access pair <code>
+```
+
+然后锁定策略：
+
+```
+/telegram:access policy allowlist
+```
+
+## 典型使用场景
+
+**场景一：手机端远程控制**
+
+Telegram 客户端跨平台且通知即时。出门在外通过手机给 bot 发指令，Claude 在你的服务器上干活。
+
+**场景二：图片分析**
+
+拍张照片发给 bot，Claude 下载后用 Read 工具查看，分析内容。比如拍一段报错截图让它帮你排查。
+
+**场景三：群组助手**
+
+在技术讨论群里加入 bot，设好 mention 规则，群成员 @bot 提问。注意需要在 BotFather 里关掉 Privacy Mode 才能让 bot 看到所有群消息（不只是 @提及的）。
+
+## 注意事项
+
+- Telegram Bot API 同一个 token 只允许一个 getUpdates 消费者。如果旧进程没退干净（比如终端直接关了），新启动会遇到 409 Conflict。插件代码里有处理——通过 PID 文件检测并杀掉旧进程，但偶尔可能需要手动清理。
+- 没有消息历史回看能力。这是 Telegram Bot API 的硬限制，不是插件的问题。
+- 群组里 `requireMention: true` 是默认值，且和 Telegram 服务端的 Privacy Mode 配合。如果改成 `--no-mention`，必须同时去 BotFather 关掉 Privacy Mode，否则消息根本不会到达 bot。
+- `ackReaction` 只能用 Telegram 的固定 emoji 白名单。自定义 emoji 和不在列表里的 unicode emoji 会被静默忽略。6:T4ac,{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://inferloop.dev/claude-plugins/external-services/telegram#article","headline":"6.10 Telegram","description":"Telegram bot 消息通道插件。和 Discord 插件同一类东西——把 Telegram bot 接入 Claude Code，消息双向桥接，带访问控制。","inLanguage":"zh-CN","author":{"@type":"Person","name":"递归客"},"publisher":{"@type":"Organization","name":"InferLoop","url":"https://inferloop.dev"},"isPartOf":{"@type":"Book","name":"Claude 插件官方指南","url":"https://inferloop.dev/claude-plugins","image":"https://images.redream.cn/images/XwX564.png"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://inferloop.dev/claude-plugins/external-services/telegram"},"image":"https://images.redream.cn/images/XwX564.png"},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"首页","item":"https://inferloop.dev"},{"@type":"ListItem","position":2,"name":"Claude 插件官方指南","item":"https://inferloop.dev/claude-plugins"},{"@type":"ListItem","position":3,"name":"6.10 Telegram","item":"https://inferloop.dev/claude-plugins/external-services/telegram"}]}]}0:{"rsc":["$","$1","c",{"children":[["$","div",null,{"className":"x:mx-auto x:flex x:max-w-(--nextra-content-width)","children":["$","$L2",null,{"value":[{"value":"定位","id":"定位","depth":2},{"value":"核心功能","id":"核心功能","depth":2},{"value":"安装与配置","id":"安装与配置","depth":2},{"value":"典型使用场景","id":"典型使用场景","depth":2},{"value":"注意事项","id":"注意事项","depth":2}],"children":[["$","$L3",null,{}],["$","$L4",null,{"metadata":{"title":"6.10 Telegram","filePath":"content/claude-plugins/external-services/telegram.md","timestamp":1778089813000},"sourceCode":"$5","children":[["$","div",null,{"id":"nextra-skip-nav"}],["$","main",null,{"data-pagefind-body":true,"children":[["$","script",null,{"type":"application/ld+json","dangerouslySetInnerHTML":{"__html":"$6"}}],"$L7"]}]]}]]}]}],null,"$L8"]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"CR_c9URqh-5K47K_DC-c1"}
+7:[["$","h1",null,{"className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-bold x:mt-2 x:text-4xl","children":["6.10 Telegram","$undefined"]}],"\n",["$","h2",null,{"id":"定位","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["定位",["$","$L9",null,{"id":"定位"}]]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Telegram bot 消息通道插件。和 Discord 插件同一类东西——把 Telegram bot 接入 Claude Code，消息双向桥接，带访问控制。"}],"\n",["$","h2",null,{"id":"核心功能","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["核心功能",["$","$L9",null,{"id":"核心功能"}]]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["本地 stdio 类型 MCP 服务器，Bun 运行，底层用 ",["$","a",null,{"href":"https://grammy.dev/","target":"_blank","rel":"noopener noreferrer","children":["grammY",["$","svg",null,{"aria-hidden":true,"width":"0.85em","height":"0.85em","viewBox":"0 0 24 24","fill":"none","stroke":"currentColor","strokeWidth":"2","strokeLinecap":"round","strokeLinejoin":"round","style":{"display":"inline-block","marginLeft":"0.18em","marginRight":"0.05em","verticalAlign":"-0.08em","opacity":0.65},"children":[["$","path",null,{"d":"M7 17L17 7"}],["$","path",null,{"d":"M8 7h9v9"}]]}]]}]," 框架。"]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"暴露给 Claude 的工具："}]}],"\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",["$","table",null,{"className":"x:block x:overflow-x-auto nextra-scrollbar x:not-first:mt-[1.25em] x:p-0","children":[["$","thead",null,{"children":["$","tr",null,{"children":[["$","th",null,{"children":"工具","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"用途","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]}],["$","tbody",null,{"children":[["$","tr",null,{"children":[["$","td",null,{"children":["$","code",null,{"className":"nextra-code","dir":"ltr","children":"reply"}],"className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":["发送消息。支持 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"reply_to"}]," 引用、",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"files"}]," 附件。图片（jpg/png/gif/webp）自动作为 photo 发送带预览，其他类型走 document。单文件最大 50MB。"],"className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":["$","code",null,{"className":"nextra-code","dir":"ltr","children":"react"}],"className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"加 emoji 反应。只支持 Telegram 固定白名单里的 emoji（👍❤🔥👀 等），用别的不会报错但也不会生效。","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":["$","code",null,{"className":"nextra-code","dir":"ltr","children":"edit_message"}],"className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"编辑 bot 之前发送的消息。","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]]}]]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["和 Discord 的关键区别：",["$","strong",null,{"children":["没有 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"fetch_messages"}]," 工具"]}],"。Telegram Bot API 不暴露消息历史和搜索，bot 只能看到实时到达的消息。如果 Claude 需要之前的上下文，只能请你复述。"]}],"\n","$La","\n","$Lb","\n","$Lc","\n","$Ld","\n","$Le","\n","$Lf","\n","$L10","\n","$L11","\n","$L12","\n","$L13","\n","$L14","\n","$L15","\n","$L16","\n","$L17","\n","$L18","\n","$L19","\n","$L1a","\n","$L1b","\n","$L1c","\n","$L1d","\n","$L1e","\n","$L1f","\n","$L20","\n","$L21","\n","$L22","\n","$L23"]
+8:["$","$L24",null,{"children":["$","$25",null,{"name":"Next.MetadataOutlet","children":"$@26"}]}]
+a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"照片处理："}]," 收到的照片自动下载到 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"~/.claude/channels/telegram/inbox/"}],"，路径直接传给 Claude。Telegram 会压缩照片；如果需要原图，发送时选”以文件方式发送”。"]}]
+b:["$","h2",null,{"id":"安装与配置","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["安装与配置",["$","$L9",null,{"id":"安装与配置"}]]}]
+c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["前置条件：",["$","a",null,{"href":"https://bun.sh","target":"_blank","rel":"noopener noreferrer","children":["Bun",["$","svg",null,{"aria-hidden":true,"width":"0.85em","height":"0.85em","viewBox":"0 0 24 24","fill":"none","stroke":"currentColor","strokeWidth":"2","strokeLinecap":"round","strokeLinejoin":"round","style":{"display":"inline-block","marginLeft":"0.18em","marginRight":"0.05em","verticalAlign":"-0.08em","opacity":0.65},"children":[["$","path",null,{"d":"M7 17L17 7"}],["$","path",null,{"d":"M8 7h9v9"}]]}]]}]]}]
+d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"1. 创建 bot"}]}]
+e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["在 Telegram 上找 ",["$","a",null,{"href":"https://t.me/BotFather","target":"_blank","rel":"noopener noreferrer","children":["@BotFather",["$","svg",null,{"aria-hidden":true,"width":"0.85em","height":"0.85em","viewBox":"0 0 24 24","fill":"none","stroke":"currentColor","strokeWidth":"2","strokeLinecap":"round","strokeLinejoin":"round","style":{"display":"inline-block","marginLeft":"0.18em","marginRight":"0.05em","verticalAlign":"-0.08em","opacity":0.65},"children":[["$","path",null,{"d":"M7 17L17 7"}],["$","path",null,{"d":"M8 7h9v9"}]]}]]}],"，发 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"/newbot"}],"，按提示设置名称和用户名（必须以 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"bot"}]," 结尾）。BotFather 回复的 token 格式如 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"123456789:AAHfiqksKZ8..."}],"。"]}]
+f:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"2. 安装插件"}]}]
+10:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L27",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L28",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"children":"/plugin install telegram@claude-plugins-official"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"/reload-plugins"}]}]]}]]}]]}]
+11:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"3. 配置 token"}]}]
+12:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L27",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L28",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":["$","span",null,{"children":"/telegram:configure 123456789:AAHfiqksKZ8..."}]}]}]]}]]}]
+13:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["写入 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"~/.claude/channels/telegram/.env"}],"。"]}]
+14:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"4. 以 channel 模式启动"}]}]
+15:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L27",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L28",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"claude"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" --channels"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" plugin:telegram@claude-plugins-official"}]]}]}]]}]]}]
+16:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"5. 配对"}]}]
+17:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"在 Telegram 上给 bot 发私信，收到 6 位配对码后："}]
+18:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L27",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L28",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":["$","span",null,{"children":"/telegram:access pair <code>"}]}]}]]}]]}]
+19:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"然后锁定策略："}]
+1a:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L27",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L28",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":["$","span",null,{"children":"/telegram:access policy allowlist"}]}]}]]}]]}]
+1b:["$","h2",null,{"id":"典型使用场景","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["典型使用场景",["$","$L9",null,{"id":"典型使用场景"}]]}]
+1c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"场景一：手机端远程控制"}]}]
+1d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Telegram 客户端跨平台且通知即时。出门在外通过手机给 bot 发指令，Claude 在你的服务器上干活。"}]
+1e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"场景二：图片分析"}]}]
+1f:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"拍张照片发给 bot，Claude 下载后用 Read 工具查看，分析内容。比如拍一段报错截图让它帮你排查。"}]
+20:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"场景三：群组助手"}]}]
+21:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"在技术讨论群里加入 bot，设好 mention 规则，群成员 @bot 提问。注意需要在 BotFather 里关掉 Privacy Mode 才能让 bot 看到所有群消息（不只是 @提及的）。"}]
+22:["$","h2",null,{"id":"注意事项","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["注意事项",["$","$L9",null,{"id":"注意事项"}]]}]
+23:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"Telegram Bot API 同一个 token 只允许一个 getUpdates 消费者。如果旧进程没退干净（比如终端直接关了），新启动会遇到 409 Conflict。插件代码里有处理——通过 PID 文件检测并杀掉旧进程，但偶尔可能需要手动清理。"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"没有消息历史回看能力。这是 Telegram Bot API 的硬限制，不是插件的问题。"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":["群组里 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"requireMention: true"}]," 是默认值，且和 Telegram 服务端的 Privacy Mode 配合。如果改成 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"--no-mention"}],"，必须同时去 BotFather 关掉 Privacy Mode，否则消息根本不会到达 bot。"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","code",null,{"className":"nextra-code","dir":"ltr","children":"ackReaction"}]," 只能用 Telegram 的固定 emoji 白名单。自定义 emoji 和不在列表里的 unicode emoji 会被静默忽略。"]}],"\n"]}]
+26:null

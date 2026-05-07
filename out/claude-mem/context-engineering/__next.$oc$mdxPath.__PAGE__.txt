@@ -1,0 +1,311 @@
+1:"$Sreact.fragment"
+2:I[55169,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"TOCProvider"]
+3:I[769,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"Sidebar"]
+4:I[47486,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ClientWrapper"]
+a:I[63894,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"HeadingAnchor"]
+56:I[97367,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"OutletBoundary"]
+57:"$Sreact.suspense"
+59:I[83987,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ToggleWordWrapButton"]
+5a:I[40493,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"CopyToClipboard"]
+5b:I[22016,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],""]
+5:T23b2,本章介绍 Context Engineering（上下文工程）的核心概念——这些概念直接决定了 claude-mem 为什么这样设计。每个理论点都会用 claude-mem 的实际行为来举例，帮助你建立"设计原则 → 系统实现"的因果关系。
+
+## Token 预算即注意力预算
+
+LLM 的上下文窗口有一个容易被忽视的性质：**它不是一个等价的存储空间，而是一个有衰减的注意力场**。
+
+往上下文里塞 100,000 Token 的内容，不等于模型对这 100,000 Token 的每一个都"读到了"。Transformer 的注意力机制意味着：
+- 每个 Token 需要与所有其他 Token 计算注意力权重（n² 关系）
+- 上下文越长，单个 Token 获得的平均注意力越低
+- 长序列中间位置的信息容易被忽略（Lost in the Middle 效应），模型对开头和结尾的注意力相对更强
+- 模型对超长序列的训练经验不如短序列充分
+
+把上下文窗口想象成一个预算：
+
+| 类比 | 含义 |
+|------|------|
+| 总预算 | 上下文窗口大小（如 200K Token） |
+| 每笔支出 | 注入的每段上下文 |
+| 投资回报率 | 这段上下文对任务完成有多大帮助 |
+| 机会成本 | 占用了本该留给"真正工作"的空间 |
+
+claude-mem 的设计原则就是：**最大化每个 Token 的投资回报率**。Progressive Disclosure 的本质是让 Agent 自己管理预算，而不是系统替它花钱。
+
+## 上下文腐烂（Context Rot）与信噪比
+
+Context Rot 是一个实践中频繁出现但少有人命名的问题：
+
+**随着对话轮次增加，早期注入的上下文逐渐失去有效性。**
+
+原因有几个：
+1. 任务目标可能已经转变（用户从 "修 Bug" 转到 "加新功能"）
+2. 早期的代码状态可能已被修改
+3. 中间产出的大量工具输出稀释了关键信息
+4. 模型对更早的 Token 注意力衰减
+
+传统 RAG 系统的做法是在会话开始时一次性注入大量"可能相关"的上下文。这在短会话中问题不大，但在多轮长会话中，这些一开始注入的上下文很快就"腐烂"了——它们占用空间但不再提供价值。
+
+信噪比的公式：
+
+```
+SNR = 有效 Token 数 / 总消耗 Token 数
+```
+
+传统全量注入的 SNR 通常在 5-15%（注入了 20,000 Token，实际用到 1,000-3,000）。
+
+claude-mem 的 Progressive Disclosure 设计目标是让 SNR 尽可能接近 100%：Agent 消耗的每个 Token 都是自己主动选择的、与当前任务相关的。
+
+## System Prompt 的"正确高度"
+
+System Prompt 是上下文工程中最核心的元素之一。"正确高度"是指在两个极端之间找到平衡点：
+
+### 过于具体（Too Prescriptive）
+
+```
+如果用户说 "fix bug"，先运行 git status，然后...
+如果用户说 "add feature"，先检查 package.json，然后...
+```
+
+问题：脆性高，覆盖不了所有场景，维护成本高。
+
+### 过于模糊（Too Vague）
+
+```
+你是一个有帮助的编程助手。请做好你的工作。
+```
+
+问题：没有提供任何可操作的指导。
+
+### 正确高度
+
+```
+你是一个代码工程助手。在修改代码前先阅读相关文件。
+优先使用项目已有的模式和约定。如果不确定，先问。
+```
+
+claude-mem 的 Context Injection 遵循同样的原则：不是注入具体的指令（"当你修 auth bug 时记得看 #342"），而是提供一个索引让 Agent 自主判断。
+
+这对 Memory 系统的启示是：**注入的上下文应该是 Enabling（赋能）而非 Prescribing（规定）**。给 Agent 信息，而不是命令。
+
+## Just-In-Time Context vs Pre-Inference Retrieval
+
+两种检索策略的对比：
+
+### Pre-Inference Retrieval（预推理检索）
+
+```
+用户输入 → Embedding → 向量检索 → Top-K 结果注入 → LLM 推理
+```
+
+在 LLM 开始思考之前，系统已经决定了注入哪些上下文。这是传统 RAG 的做法。
+
+**适用场景**：
+- 静态知识库查询（FAQ、文档问答）
+- 短会话、单轮问答
+- 上下文与查询关系明确
+
+**局限**：
+- 系统不知道 Agent 后续会做什么
+- 多步任务中，第一步的检索对第三步可能无用
+- 无法适应任务中途的方向变化
+
+### Just-In-Time Context（即时上下文）
+
+```
+用户输入 → LLM 开始推理 → Agent 判断需要什么信息 → 使用工具检索 → 继续推理
+```
+
+Agent 在推理过程中会根据实际需要动态获取上下文。
+
+**适用场景**：
+- 多步骤任务
+- 探索性工作（不确定需要什么信息）
+- 长会话、上下文需求动态变化
+
+**局限**：
+- 比预检索慢（多了一轮工具调用）
+- 需要 Agent 有"主动搜索"的意识
+- 工具描述本身占用 Token
+
+### claude-mem 的混合策略
+
+claude-mem 结合了两者：
+
+1. **Pre-Inference**：SessionStart 注入轻量级索引（~800 Token），提供"地图"
+2. **Just-In-Time**：MCP 搜索工具允许 Agent 在推理过程中按需获取详情
+
+这个设计的效果是：索引够轻所以预注入的成本低，但信息够丰富让 Agent 能判断什么时候该深入。
+
+## 长任务三板斧
+
+软件工程中的任务经常需要几十轮工具调用，上下文很容易在中途耗尽或腐烂。三种应对策略：
+
+### 策略 1：Compaction（压缩）
+
+当对话接近上下文限制时，将历史消息交给模型生成压缩摘要，用摘要替换原始消息继续对话。
+
+```
+原始对话（90,000 Token）
+    ↓ 压缩
+摘要（3,000 Token）+ 最近 5 轮对话（7,000 Token）
+    ↓
+继续在 10,000 Token 基础上工作
+```
+
+**调优思路**：
+- 先最大化 Recall（不漏掉关键信息）
+- 再优化 Precision（去除冗余）
+- 优先清理旧的工具调用输出（Token 量大但价值衰减快）
+
+**claude-mem 的关联**：Session Summary 就是一种 Compaction——将整个会话的工具使用压缩为 request / investigated / learned / completed / next_steps 五个维度的结构化摘要。
+
+### 策略 2：Structured Note-Taking（结构化笔记）
+
+Agent 在工作过程中主动向外部存储写入笔记，需要时再读回来。笔记不在上下文窗口内，不占用 Token。
+
+```typescript
+// Agent 完成第一阶段后
+await writeFile('PROGRESS.md', `
+## 已完成
+- 数据库 Schema 设计
+- API 路由定义
+
+## 待做
+- 实现认证中间件
+- 写入测试
+`);
+
+// 下一步开始时
+const progress = await readFile('PROGRESS.md');
+// Agent 知道当前状态，不需要从头回忆
+```
+
+**claude-mem 的关联**：整个 Observation 系统本质上就是自动化的结构化笔记。区别在于：不需要 Agent "记得"写笔记，系统自动完成。
+
+### 策略 3：Sub-Agent Architecture（子代理架构）
+
+将复杂任务拆分给专门的子代理，每个子代理有独立的、干净的上下文窗口。
+
+```
+Main Agent（协调者）
+  ├── Sub-Agent A：调研现有实现（读 20 个文件，返回 2000 Token 摘要）
+  ├── Sub-Agent B：分析依赖关系（查 5 个包，返回 1000 Token 报告）
+  └── Sub-Agent C：实现代码（基于 A+B 的摘要，专注写代码）
+```
+
+每个子代理可以深入探索（消耗数万 Token），但只向主代理返回浓缩的结果（1-2K Token）。
+
+**claude-mem 的关联**：Knowledge Agent 的 Build → Prime → Query 模式就是一种 Sub-Agent 架构——Corpus 编译是一个"子代理"任务，将大量 Observation 浓缩为一个可查询的知识库。
+
+### 选择策略的决策框架
+
+| 场景 | 推荐策略 |
+|------|---------|
+| 长对话接近上下文限制 | Compaction |
+| 迭代开发，需要跟踪进度 | Structured Note-Taking |
+| 需要大量信息收集后做决策 | Sub-Agent |
+| 跨会话的持久记忆 | 以上三者的组合（即 claude-mem 的做法） |
+
+## 小结
+
+Context Engineering 的核心认知：
+
+1. **Token 是稀缺资源**，不是"反正窗口很大就往里塞"
+2. **注入的上下文会腐烂**，越早注入的信息在长会话中越容易失去价值
+3. **让 Agent 自主管理上下文**比系统替它决定更高效
+4. **混合策略优于单一策略**——预注入轻量索引 + 按需深度获取
+
+这些原则是理解后续 claude-mem 架构设计的基础。为什么选 Progressive Disclosure 而非传统 RAG？为什么 Hook 层只做快速入队而不做处理？为什么 MCP 工具被精简到只有 4 个？——这些决策都可以追溯到本章讨论的 Context Engineering 原则。
+
+---
+
+**思考题**
+
+1. 如何为你自己的项目量化 Context Rot？设计一个实验：在长对话的不同轮次注入同一条信息，观察 Agent 对该信息的引用准确率变化曲线。
+2. 如果你的项目 context window 只有 8K tokens（如本地小模型），上述四种 Context Management 策略中你会优先选哪个？为什么？
+3. "让 Agent 自主管理上下文"和"系统替 Agent 决定"之间的边界在哪里？举一个适合系统强制注入的场景。
+
+---
+
+> 本书开源发布于 [inferloop.dev](https://inferloop.dev)，转载请注明出处。
+
+下一章开始进入架构篇，从 claude-mem 的系统全景开始，逐层拆解每个组件的设计与实现。0:{"rsc":["$","$1","c",{"children":[["$","div",null,{"className":"x:mx-auto x:flex x:max-w-(--nextra-content-width)","children":["$","$L2",null,{"value":[{"value":"Token 预算即注意力预算","id":"token-预算即注意力预算","depth":2},{"value":"上下文腐烂（Context Rot）与信噪比","id":"上下文腐烂context-rot与信噪比","depth":2},{"value":"System Prompt 的”正确高度”","id":"system-prompt-的正确高度","depth":2},{"value":"过于具体（Too Prescriptive）","id":"过于具体too-prescriptive","depth":3},{"value":"过于模糊（Too Vague）","id":"过于模糊too-vague","depth":3},{"value":"正确高度","id":"正确高度","depth":3},{"value":"Just-In-Time Context vs Pre-Inference Retrieval","id":"just-in-time-context-vs-pre-inference-retrieval","depth":2},{"value":"Pre-Inference Retrieval（预推理检索）","id":"pre-inference-retrieval预推理检索","depth":3},{"value":"Just-In-Time Context（即时上下文）","id":"just-in-time-context即时上下文","depth":3},{"value":"claude-mem 的混合策略","id":"claude-mem-的混合策略","depth":3},{"value":"长任务三板斧","id":"长任务三板斧","depth":2},{"value":"策略 1：Compaction（压缩）","id":"策略-1compaction压缩","depth":3},{"value":"策略 2：Structured Note-Taking（结构化笔记）","id":"策略-2structured-note-taking结构化笔记","depth":3},{"value":"策略 3：Sub-Agent Architecture（子代理架构）","id":"策略-3sub-agent-architecture子代理架构","depth":3},{"value":"选择策略的决策框架","id":"选择策略的决策框架","depth":3},{"value":"小结","id":"小结","depth":2}],"children":[["$","$L3",null,{}],["$","$L4",null,{"metadata":{"title":"Context Engineering","filePath":"content/claude-mem/context-engineering.md","timestamp":1778089813000},"sourceCode":"$5","children":["$L6","$L7"]}]]}]}],null,"$L8"]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"CR_c9URqh-5K47K_DC-c1"}
+6:["$","div",null,{"id":"nextra-skip-nav"}]
+9:T503,{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://inferloop.dev/claude-mem/context-engineering#article","headline":"Context Engineering","description":"本章介绍 Context Engineering（上下文工程）的核心概念——这些概念直接决定了 claude-mem 为什么这样设计。每个理论点都会用 claude-mem 的实际行为来举例，帮助你建立\"设计原则 → 系统实现\"的因果关系。","inLanguage":"zh-CN","author":{"@type":"Person","name":"递归客"},"publisher":{"@type":"Organization","name":"InferLoop","url":"https://inferloop.dev"},"isPartOf":{"@type":"Book","name":"Agent Memory 工程实战","url":"https://inferloop.dev/claude-mem","image":"https://images.redream.cn/images/Om4nBq.png"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://inferloop.dev/claude-mem/context-engineering"},"image":"https://images.redream.cn/images/Om4nBq.png"},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"首页","item":"https://inferloop.dev"},{"@type":"ListItem","position":2,"name":"Agent Memory 工程实战","item":"https://inferloop.dev/claude-mem"},{"@type":"ListItem","position":3,"name":"Context Engineering","item":"https://inferloop.dev/claude-mem/context-engineering"}]}]}7:["$","main",null,{"data-pagefind-body":true,"children":[["$","script",null,{"type":"application/ld+json","dangerouslySetInnerHTML":{"__html":"$9"}}],[["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"本章介绍 Context Engineering（上下文工程）的核心概念——这些概念直接决定了 claude-mem 为什么这样设计。每个理论点都会用 claude-mem 的实际行为来举例，帮助你建立”设计原则 → 系统实现”的因果关系。"}],"\n",["$","h2",null,{"id":"token-预算即注意力预算","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["Token 预算即注意力预算",["$","$La",null,{"id":"token-预算即注意力预算"}]]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["LLM 的上下文窗口有一个容易被忽视的性质：",["$","strong",null,{"children":"它不是一个等价的存储空间，而是一个有衰减的注意力场"}],"。"]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"往上下文里塞 100,000 Token 的内容，不等于模型对这 100,000 Token 的每一个都”读到了”。Transformer 的注意力机制意味着："}],"\n",["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"每个 Token 需要与所有其他 Token 计算注意力权重（n² 关系）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"上下文越长，单个 Token 获得的平均注意力越低"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"长序列中间位置的信息容易被忽略（Lost in the Middle 效应），模型对开头和结尾的注意力相对更强"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"模型对超长序列的训练经验不如短序列充分"}],"\n"]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"把上下文窗口想象成一个预算："}],"\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",["$","table",null,{"className":"x:block x:overflow-x-auto nextra-scrollbar x:not-first:mt-[1.25em] x:p-0","children":[["$","thead",null,{"children":["$","tr",null,{"children":[["$","th",null,{"children":"类比","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"含义","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]}],["$","tbody",null,{"children":[["$","tr",null,{"children":[["$","td",null,{"children":"总预算","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"上下文窗口大小（如 200K Token）","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],"$Lb","$Lc","$Ld"]}]]}],"\n","$Le","\n","$Lf","\n","$L10","\n","$L11","\n","$L12","\n","$L13","\n","$L14","\n","$L15","\n","$L16","\n","$L17","\n","$L18","\n","$L19","\n","$L1a","\n","$L1b","\n","$L1c","\n","$L1d","\n","$L1e","\n","$L1f","\n","$L20","\n","$L21","\n","$L22","\n","$L23","\n","$L24","\n","$L25","\n","$L26","\n","$L27","\n","$L28","\n","$L29","\n","$L2a","\n","$L2b","\n","$L2c","\n","$L2d","\n","$L2e","\n","$L2f","\n","$L30","\n","$L31","\n","$L32","\n","$L33","\n","$L34","\n","$L35","\n","$L36","\n","$L37","\n","$L38","\n","$L39","\n","$L3a","\n","$L3b","\n","$L3c","\n","$L3d","\n","$L3e","\n","$L3f","\n","$L40","\n","$L41","\n","$L42","\n","$L43","\n","$L44","\n","$L45","\n","$L46","\n","$L47","\n","$L48","\n","$L49","\n","$L4a","\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n","$L4b","\n","$L4c","\n","$L4d","\n","$L4e","\n","$L4f","\n","$L50","\n","$L51","\n","$L52","\n","$L53","\n","$L54","\n","$L55"]]}]
+8:["$","$L56",null,{"children":["$","$57",null,{"name":"Next.MetadataOutlet","children":"$@58"}]}]
+b:["$","tr",null,{"children":[["$","td",null,{"children":"每笔支出","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"注入的每段上下文","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]
+c:["$","tr",null,{"children":[["$","td",null,{"children":"投资回报率","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"这段上下文对任务完成有多大帮助","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]
+d:["$","tr",null,{"children":[["$","td",null,{"children":"机会成本","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"占用了本该留给”真正工作”的空间","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]
+e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["claude-mem 的设计原则就是：",["$","strong",null,{"children":"最大化每个 Token 的投资回报率"}],"。Progressive Disclosure 的本质是让 Agent 自己管理预算，而不是系统替它花钱。"]}]
+f:["$","h2",null,{"id":"上下文腐烂context-rot与信噪比","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["上下文腐烂（Context Rot）与信噪比",["$","$La",null,{"id":"上下文腐烂context-rot与信噪比"}]]}]
+10:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Context Rot 是一个实践中频繁出现但少有人命名的问题："}]
+11:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"随着对话轮次增加，早期注入的上下文逐渐失去有效性。"}]}]
+12:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"原因有几个："}]
+13:["$","ol",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-decimal x:ms-6","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"任务目标可能已经转变（用户从 “修 Bug” 转到 “加新功能”）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"早期的代码状态可能已被修改"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"中间产出的大量工具输出稀释了关键信息"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"模型对更早的 Token 注意力衰减"}],"\n"]}]
+14:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"传统 RAG 系统的做法是在会话开始时一次性注入大量”可能相关”的上下文。这在短会话中问题不大，但在多轮长会话中，这些一开始注入的上下文很快就”腐烂”了——它们占用空间但不再提供价值。"}]
+15:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"信噪比的公式："}]
+16:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L59",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L5a",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":["$","span",null,{"children":"SNR = 有效 Token 数 / 总消耗 Token 数"}]}]}]]}]]}]
+17:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"传统全量注入的 SNR 通常在 5-15%（注入了 20,000 Token，实际用到 1,000-3,000）。"}]
+18:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"claude-mem 的 Progressive Disclosure 设计目标是让 SNR 尽可能接近 100%：Agent 消耗的每个 Token 都是自己主动选择的、与当前任务相关的。"}]
+19:["$","h2",null,{"id":"system-prompt-的正确高度","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["System Prompt 的”正确高度”",["$","$La",null,{"id":"system-prompt-的正确高度"}]]}]
+1a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"System Prompt 是上下文工程中最核心的元素之一。“正确高度”是指在两个极端之间找到平衡点："}]
+1b:["$","h3",null,{"id":"过于具体too-prescriptive","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["过于具体（Too Prescriptive）",["$","$La",null,{"id":"过于具体too-prescriptive"}]]}]
+1c:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L59",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L5a",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"children":"如果用户说 \"fix bug\"，先运行 git status，然后..."}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"如果用户说 \"add feature\"，先检查 package.json，然后..."}]}]]}]]}]]}]
+1d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"问题：脆性高，覆盖不了所有场景，维护成本高。"}]
+1e:["$","h3",null,{"id":"过于模糊too-vague","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["过于模糊（Too Vague）",["$","$La",null,{"id":"过于模糊too-vague"}]]}]
+1f:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L59",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L5a",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":["$","span",null,{"children":"你是一个有帮助的编程助手。请做好你的工作。"}]}]}]]}]]}]
+20:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"问题：没有提供任何可操作的指导。"}]
+21:["$","h3",null,{"id":"正确高度","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["正确高度",["$","$La",null,{"id":"正确高度"}]]}]
+22:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L59",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L5a",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"children":"你是一个代码工程助手。在修改代码前先阅读相关文件。"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"优先使用项目已有的模式和约定。如果不确定，先问。"}]}]]}]]}]]}]
+23:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"claude-mem 的 Context Injection 遵循同样的原则：不是注入具体的指令（“当你修 auth bug 时记得看 #342”），而是提供一个索引让 Agent 自主判断。"}]
+24:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["这对 Memory 系统的启示是：",["$","strong",null,{"children":"注入的上下文应该是 Enabling（赋能）而非 Prescribing（规定）"}],"。给 Agent 信息，而不是命令。"]}]
+25:["$","h2",null,{"id":"just-in-time-context-vs-pre-inference-retrieval","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["Just-In-Time Context vs Pre-Inference Retrieval",["$","$La",null,{"id":"just-in-time-context-vs-pre-inference-retrieval"}]]}]
+26:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"两种检索策略的对比："}]
+27:["$","h3",null,{"id":"pre-inference-retrieval预推理检索","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["Pre-Inference Retrieval（预推理检索）",["$","$La",null,{"id":"pre-inference-retrieval预推理检索"}]]}]
+28:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L59",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L5a",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":["$","span",null,{"children":"用户输入 → Embedding → 向量检索 → Top-K 结果注入 → LLM 推理"}]}]}]]}]]}]
+29:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"在 LLM 开始思考之前，系统已经决定了注入哪些上下文。这是传统 RAG 的做法。"}]
+2a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"适用场景"}],"："]}]
+2b:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"静态知识库查询（FAQ、文档问答）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"短会话、单轮问答"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"上下文与查询关系明确"}],"\n"]}]
+2c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"局限"}],"："]}]
+2d:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"系统不知道 Agent 后续会做什么"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"多步任务中，第一步的检索对第三步可能无用"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"无法适应任务中途的方向变化"}],"\n"]}]
+2e:["$","h3",null,{"id":"just-in-time-context即时上下文","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["Just-In-Time Context（即时上下文）",["$","$La",null,{"id":"just-in-time-context即时上下文"}]]}]
+2f:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L59",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L5a",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":["$","span",null,{"children":"用户输入 → LLM 开始推理 → Agent 判断需要什么信息 → 使用工具检索 → 继续推理"}]}]}]]}]]}]
+30:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Agent 在推理过程中会根据实际需要动态获取上下文。"}]
+31:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"适用场景"}],"："]}]
+32:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"多步骤任务"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"探索性工作（不确定需要什么信息）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"长会话、上下文需求动态变化"}],"\n"]}]
+33:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"局限"}],"："]}]
+34:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"比预检索慢（多了一轮工具调用）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"需要 Agent 有”主动搜索”的意识"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"工具描述本身占用 Token"}],"\n"]}]
+35:["$","h3",null,{"id":"claude-mem-的混合策略","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["claude-mem 的混合策略",["$","$La",null,{"id":"claude-mem-的混合策略"}]]}]
+36:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"claude-mem 结合了两者："}]
+37:["$","ol",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-decimal x:ms-6","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"Pre-Inference"}],"：SessionStart 注入轻量级索引（~800 Token），提供”地图”"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"Just-In-Time"}],"：MCP 搜索工具允许 Agent 在推理过程中按需获取详情"]}],"\n"]}]
+38:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这个设计的效果是：索引够轻所以预注入的成本低，但信息够丰富让 Agent 能判断什么时候该深入。"}]
+39:["$","h2",null,{"id":"长任务三板斧","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["长任务三板斧",["$","$La",null,{"id":"长任务三板斧"}]]}]
+3a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"软件工程中的任务经常需要几十轮工具调用，上下文很容易在中途耗尽或腐烂。三种应对策略："}]
+3b:["$","h3",null,{"id":"策略-1compaction压缩","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["策略 1：Compaction（压缩）",["$","$La",null,{"id":"策略-1compaction压缩"}]]}]
+3c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"当对话接近上下文限制时，将历史消息交给模型生成压缩摘要，用摘要替换原始消息继续对话。"}]
+3d:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L59",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L5a",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"children":"原始对话（90,000 Token）"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"    ↓ 压缩"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"摘要（3,000 Token）+ 最近 5 轮对话（7,000 Token）"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"    ↓"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"继续在 10,000 Token 基础上工作"}]}]]}]]}]]}]
+3e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"调优思路"}],"："]}]
+3f:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"先最大化 Recall（不漏掉关键信息）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"再优化 Precision（去除冗余）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"优先清理旧的工具调用输出（Token 量大但价值衰减快）"}],"\n"]}]
+40:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"claude-mem 的关联"}],"：Session Summary 就是一种 Compaction——将整个会话的工具使用压缩为 request / investigated / learned / completed / next_steps 五个维度的结构化摘要。"]}]
+41:["$","h3",null,{"id":"策略-2structured-note-taking结构化笔记","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["策略 2：Structured Note-Taking（结构化笔记）",["$","$La",null,{"id":"策略-2structured-note-taking结构化笔记"}]]}]
+42:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Agent 在工作过程中主动向外部存储写入笔记，需要时再读回来。笔记不在上下文窗口内，不占用 Token。"}]
+43:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L59",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L5a",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"// Agent 完成第一阶段后"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"await"}],["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":" writeFile"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"("}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"'PROGRESS.md'"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":", "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"`"}]]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"## 已完成"}]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"- 数据库 Schema 设计"}]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"- API 路由定义"}]}],"\n",["$","span",null,{"children":" "}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"## 待做"}]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"- 实现认证中间件"}]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"- 写入测试"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"`"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":");"}]]}],"\n",["$","span",null,{"children":" "}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"// 下一步开始时"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"const"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" progress"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":" ="}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":" await"}],["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":" readFile"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"("}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"'PROGRESS.md'"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":");"}]]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"// Agent 知道当前状态，不需要从头回忆"}]}]]}]]}]]}]
+44:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"claude-mem 的关联"}],"：整个 Observation 系统本质上就是自动化的结构化笔记。区别在于：不需要 Agent “记得”写笔记，系统自动完成。"]}]
+45:["$","h3",null,{"id":"策略-3sub-agent-architecture子代理架构","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["策略 3：Sub-Agent Architecture（子代理架构）",["$","$La",null,{"id":"策略-3sub-agent-architecture子代理架构"}]]}]
+46:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"将复杂任务拆分给专门的子代理，每个子代理有独立的、干净的上下文窗口。"}]
+47:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L59",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L5a",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"children":"Main Agent（协调者）"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"  ├── Sub-Agent A：调研现有实现（读 20 个文件，返回 2000 Token 摘要）"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"  ├── Sub-Agent B：分析依赖关系（查 5 个包，返回 1000 Token 报告）"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"  └── Sub-Agent C：实现代码（基于 A+B 的摘要，专注写代码）"}]}]]}]]}]]}]
+48:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"每个子代理可以深入探索（消耗数万 Token），但只向主代理返回浓缩的结果（1-2K Token）。"}]
+49:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"claude-mem 的关联"}],"：Knowledge Agent 的 Build → Prime → Query 模式就是一种 Sub-Agent 架构——Corpus 编译是一个”子代理”任务，将大量 Observation 浓缩为一个可查询的知识库。"]}]
+4a:["$","h3",null,{"id":"选择策略的决策框架","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["选择策略的决策框架",["$","$La",null,{"id":"选择策略的决策框架"}]]}]
+4b:["$","table",null,{"className":"x:block x:overflow-x-auto nextra-scrollbar x:not-first:mt-[1.25em] x:p-0","children":[["$","thead",null,{"children":["$","tr",null,{"children":[["$","th",null,{"children":"场景","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"推荐策略","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]}],["$","tbody",null,{"children":[["$","tr",null,{"children":[["$","td",null,{"children":"长对话接近上下文限制","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"Compaction","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"迭代开发，需要跟踪进度","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"Structured Note-Taking","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"需要大量信息收集后做决策","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"Sub-Agent","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"跨会话的持久记忆","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"以上三者的组合（即 claude-mem 的做法）","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]]}]]}]
+4c:["$","h2",null,{"id":"小结","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["小结",["$","$La",null,{"id":"小结"}]]}]
+4d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Context Engineering 的核心认知："}]
+4e:["$","ol",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-decimal x:ms-6","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"Token 是稀缺资源"}],"，不是”反正窗口很大就往里塞”"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"注入的上下文会腐烂"}],"，越早注入的信息在长会话中越容易失去价值"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"让 Agent 自主管理上下文"}],"比系统替它决定更高效"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"混合策略优于单一策略"}],"——预注入轻量索引 + 按需深度获取"]}],"\n"]}]
+4f:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这些原则是理解后续 claude-mem 架构设计的基础。为什么选 Progressive Disclosure 而非传统 RAG？为什么 Hook 层只做快速入队而不做处理？为什么 MCP 工具被精简到只有 4 个？——这些决策都可以追溯到本章讨论的 Context Engineering 原则。"}]
+50:["$","hr",null,{"className":"x:my-[2em] nextra-border"}]
+51:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"思考题"}]}]
+52:["$","ol",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-decimal x:ms-6","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"如何为你自己的项目量化 Context Rot？设计一个实验：在长对话的不同轮次注入同一条信息，观察 Agent 对该信息的引用准确率变化曲线。"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"如果你的项目 context window 只有 8K tokens（如本地小模型），上述四种 Context Management 策略中你会优先选哪个？为什么？"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"“让 Agent 自主管理上下文”和”系统替 Agent 决定”之间的边界在哪里？举一个适合系统强制注入的场景。"}],"\n"]}]
+53:["$","hr",null,{"className":"x:my-[2em] nextra-border"}]
+54:["$","blockquote",null,{"className":"x:not-first:mt-[1.25em] x:border-gray-300 x:italic x:text-gray-700 x:dark:border-gray-700 x:dark:text-gray-400 x:border-s-2 x:ps-[1.5em]","children":["\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["本书开源发布于 ",["$","$L5b",null,{"href":"https://inferloop.dev","children":"inferloop.dev"}],"，转载请注明出处。"]}],"\n"]}]
+55:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"下一章开始进入架构篇，从 claude-mem 的系统全景开始，逐层拆解每个组件的设计与实现。"}]
+58:null

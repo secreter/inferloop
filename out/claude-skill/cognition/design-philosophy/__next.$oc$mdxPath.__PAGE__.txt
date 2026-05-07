@@ -1,0 +1,257 @@
+1:"$Sreact.fragment"
+2:I[55169,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"TOCProvider"]
+3:I[769,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"Sidebar"]
+4:I[47486,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ClientWrapper"]
+a:I[63894,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"HeadingAnchor"]
+b:I[83987,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ToggleWordWrapButton"]
+c:I[40493,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"CopyToClipboard"]
+50:I[97367,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"OutletBoundary"]
+51:"$Sreact.suspense"
+5:T2cc2,# 第 2 章 Skill 的设计哲学
+
+## 一条被忽视的指令
+
+上个月我在一个代码审查 Skill 里写了这么一条：
+
+```
+MUST ALWAYS check for null values before accessing nested properties.
+```
+
+全大写，够醒目了吧？结果跑了十几轮测试，AI 该漏检的还是漏检。我甚至加了感叹号，加了"CRITICAL"前缀，毫无改善。
+
+我一开始觉得是模型不行。后来我把这条指令改成了：
+
+```
+访问嵌套属性前检查 null。我们的 production 代码里因为 `user.profile.avatar`
+这类链式访问导致过 3 次 P0 事故，Sentry 上标记为 "Cannot read property of undefined"。
+TypeScript 的可选链（?.）不够，因为我们需要在 null 时走降级逻辑而不是静默返回 undefined。
+```
+
+效果立刻不一样了。AI 不仅开始检查 null，还能在某些场景下主动判断"这里其实不需要检查，因为上游已经做了校验"。
+
+这件事让我意识到：写 Skill 不是写规则手册。你面对的不是一个需要被条条框框约束的执行器，而是一个理解力很强、但完全没有你的业务上下文的同事。你不需要对他吼"必须这样做"，你需要告诉他"我们为什么这样做"。
+
+skill-creator——Anthropic 官方出品的那个"用来创建 Skill 的 Skill"——在它自己的 SKILL.md 里把这条经验写得很直白：
+
+> Try hard to explain the **why** behind everything you're asking the model to do. If you find yourself writing ALWAYS or NEVER in all caps, that's a yellow flag — reframe and explain the reasoning.
+
+这不是客气话。这是从大量迭代中沉淀出来的工程结论。本章要拆解的，就是 skill-creator 背后的六条设计原则。
+
+## 原则一：Theory of Mind > Rigid Rules
+
+你可能在各种 prompt engineering 教程里见过这种写法：
+
+```markdown
+## Rules
+- MUST use TypeScript strict mode
+- NEVER use any type
+- ALWAYS add error handling for async operations
+```
+
+早期模型对全大写确实更敏感。但现在的大模型——特别是经过 RLHF 对齐的模型——对这种命令式语气反而容易产生两个问题：一是注意力稀释，当你有 20 条 MUST 的时候，每条的权重都在下降；二是丧失灵活性，AI 会机械执行而不去判断上下文。
+
+对比一下：
+
+```markdown
+❌ MUST ALWAYS use try-catch for async operations
+```
+
+```markdown
+✅ 用 try-catch 包裹异步操作。我们的错误监控（Sentry）只能捕获被 catch 的异常，
+   未包裹的 Promise rejection 会变成沉默失败，运维团队看不到任何告警。
+```
+
+第二种写法的好处不只是"更礼貌"。当 AI 知道原因是 Sentry 的捕获机制时，它能自己推断出：单元测试里的异步操作不需要 try-catch，因为测试框架有自己的错误处理；但 API handler 里的绝对要包裹，因为那是 Sentry 监控的核心路径。
+
+你给了 why，AI 就能处理你没列举的边界情况。你只给了 what，AI 就只能做你说的那些——多一步不走，少一步不觉得有问题。
+
+skill-creator 自己的 SKILL.md 有 470 多行，里面没有一个全大写的 MUST。它的每条指令都带着工程理由。比如它不是说"MUST run baseline tests"，而是解释为什么要跑基线："The user is iterating on only a few examples...if the skill works only for those examples, it's useless."
+
+## 原则二：渐进式信息披露
+
+你不会在新同事入职第一天就把团队所有文档链接甩给他。你会先告诉他"我们是做什么的"，等他上手了再介绍代码规范，遇到具体问题了再指向架构文档。
+
+Skill 的加载机制也是这个思路，分三级：
+
+**Level 1（始终在上下文里）**：frontmatter 里的 `name` + `description`，大约 100 词。AI 靠这一层决定要不要触发这个 Skill。
+
+**Level 2（触发时加载）**：SKILL.md 的正文，建议控制在 500 行以内。这是完整的工作指令。
+
+**Level 3（按需加载）**：`references/`、`scripts/`、`assets/` 目录下的文件。用到才读，不用不碰。
+
+```
+my-skill/
+├── SKILL.md          ← Level 1（frontmatter）+ Level 2（正文）
+├── scripts/
+│   └── aggregate.py  ← Level 3，执行时才加载
+└── references/
+    ├── aws.md        ← Level 3，处理 AWS 场景时才读
+    └── gcp.md        ← Level 3，处理 GCP 场景时才读
+```
+
+这个分层的实际影响比你想的大。我见过有人写了 2000 行的 SKILL.md，把所有平台的配置说明、所有边界情况的处理方案全塞在正文里。结果比一个 300 行的精简版效果更差——不是因为内容有问题，是因为信息密度太高时，模型对关键指令的执行准确率会下降。
+
+skill-creator 自身就是个好样本：它的 SKILL.md 控制在 500 行以内，但通过 `agents/` 目录下的 `grader.md`、`comparator.md`、`analyzer.md` 和 `scripts/` 目录下的评测脚本，支撑了一整套评测流水线。正文只说"什么时候读 agents/grader.md"，而不是把 grader 的全部逻辑内联进来。
+
+## 原则三：精益指令
+
+我有个习惯，写完 Skill 之后会去读 AI 的执行 transcript——不是只看最终输出，而是看它中间的推理过程和工具调用序列。
+
+读 transcript 能发现两类问题：
+
+**第一类：AI 每次都自然做到了的事。** 比如你写了"use proper indentation"，但 AI 生成代码时从来就没乱过缩进。这条指令占着 token，没产生任何价值。删掉。
+
+**第二类：AI 每次都忽略了的事。** 这时候本能反应是加粗、加大写、加感叹号。但正确做法是回到原则一——改写方式，解释原因，或者直接给一个输入输出的示例。
+
+代码里有个概念叫死代码（dead code），就是永远不会被执行到的分支。Skill 里也有"死指令"——AI 要么天然就会做、要么怎么强调都不做的指令。两种情况的处理一样：删掉。
+
+skill-creator 的文档里有句话说得精准：
+
+> Remove things that aren't pulling their weight. Read the transcripts, not just the final outputs — if the skill is making the model waste time doing unproductive things, try getting rid of those parts.
+
+fewer, better instructions often outperform exhaustive rules。这不是抽象道理，是从反复跑评测中得出的经验数据。
+
+## 原则四：泛化 > 过拟合
+
+写过机器学习模型的人都知道过拟合的陷阱。Skill 开发有一模一样的问题。
+
+典型场景：你写了 3 个测试用例，然后反复调 Skill 直到这 3 个用例完美通过。某个用例是关于 React useEffect 的，于是你加了一条：
+
+```markdown
+❌ 如果文件是 .tsx 且包含 useEffect，检查依赖数组是否完整
+```
+
+这条指令对你那个测试用例确实管用。但你的 Skill 上线后会被调用无数次，面对的不只是 useEffect。useMemo、useCallback、自定义 Hooks 里的依赖声明都有同样的问题。正确的写法是：
+
+```markdown
+✅ 检查所有 React Hooks 的依赖声明是否完整。遗漏依赖会导致闭包陈旧（stale closure），
+   组件拿到的是过期的 state 或 props 值，这类 bug 在 code review 里非常容易漏掉，
+   因为代码表面上看不出任何问题。
+```
+
+skill-creator 对这一点的表述很直接：
+
+> We're trying to create skills that can be used a million times across many different prompts. Rather than put in fiddly overfitty changes, if there's some stubborn issue, try branching out and using different metaphors or recommending different patterns.
+
+当某个测试用例失败时，不要急着加一条针对性修补。先问自己：这个失败暴露的根因是什么？能不能用一条更通用的指令覆盖这个问题以及它的同类问题？
+
+## 原则五：无惊喜原则
+
+这条说起来简单：Skill 的实际行为不应该让用户感到意外。
+
+具体到工程层面有三个要求：
+
+**描述和行为一致。** 如果 description 说"审查代码质量"，Skill 就不应该偷偷去修改文件。如果 Skill 会调用外部 API（比如发消息到 Slack），必须在 description 里明确说明。
+
+**不包含恶意代码。** 这看起来是废话，但 Skill 生态一旦开放，就会有人尝试在 SKILL.md 里塞入 prompt injection。skill-creator 专门提到这一点："skills must not contain malware, exploit code, or any content that could compromise system security."
+
+**有副作用的操作要设防。** Skill 配置里有个 `disable-model-invocation: true` 选项，用于防止 AI 在用户不知情的情况下自动触发某些 Skill。如果你的 Skill 会发邮件、写数据库、调用付费 API，考虑启用这个开关，让用户显式触发。
+
+无惊喜原则的本质是信任。用户把工作流交给 Skill，是因为他信任 Skill 会做且只做他预期的事。打破一次信任，用户就不会再用了。
+
+## 原则六：Description 要"适度激进"
+
+大部分 Skill 的 description 写得太保守。比如：
+
+```yaml
+❌ description: A code review tool
+```
+
+这 5 个词传达的信息量太少，AI 在决定是否触发时很容易跳过它。用户说"帮我看看这个 PR 有没有问题"——AI 不觉得这和"a code review tool"有关。
+
+更好的写法：
+
+```yaml
+✅ description: >
+    审查代码质量和安全性。当用户提到 review、审查、检查代码、
+    看看这个 PR、帮我 check 一下、这段代码有没有问题时触发。
+```
+
+skill-creator 在这一点上用了一个很准确的词——"pushy"：
+
+> Claude has a tendency to "undertrigger" skills. To combat this, make descriptions a little bit "pushy."
+
+但"适度"两个字很关键。如果你写成"Use this for anything related to code"，那所有涉及代码的操作都会误触发你的 Skill，反而干扰正常工作流。
+
+边界在哪？把你的 Skill 会处理的典型用户表述列出来，放进 description。但不要泛化到"所有跟代码有关的事"。description 不是广告语，是触发条件的声明。
+
+## 六条原则之间的关系
+
+这六条原则不是独立的清单，它们之间有一条暗线：**写 Skill 就像带一个新加入团队的同事。**
+
+你不会给新人一本 500 页的内部手册让他入职第一天全部读完——这是渐进式披露。你不会用全大写邮件命令他"MUST ALWAYS follow coding standards"——这是 Theory of Mind，你知道解释理由比发号施令更有效。你会根据他实际犯的错来调整带教重点，而不是事无巨细全部提前讲一遍——这是精益指令。你不会因为他在某个特定项目上犯了错就立一条只适用于那个项目的规矩——这是泛化。你不会让他做任何你没告诉他的事——这是无惊喜。你会清楚地告诉别人他能帮什么忙，让需要帮助的人能找到他——这是 description 的适度激进。
+
+skill-creator 是这些原则最好的注脚。它是一个"创建 Skill 的 Skill"，自己就是自己的产物。它的 SKILL.md 不用全大写，解释每条指令的工程理由，正文控制在 500 行以内但通过引用文件支撑完整流程，持续在迭代中删减不起作用的指令。它不是在教你六条抽象原则，它是在用自己的存在证明这些原则确实管用。
+
+下一章我们进入动手环节——从零开始写一个能跑的 Skill。0:{"rsc":["$","$1","c",{"children":[["$","div",null,{"className":"x:mx-auto x:flex x:max-w-(--nextra-content-width)","children":["$","$L2",null,{"value":[{"value":"一条被忽视的指令","id":"一条被忽视的指令","depth":2},{"value":"原则一：Theory of Mind > Rigid Rules","id":"原则一theory-of-mind--rigid-rules","depth":2},{"value":"原则二：渐进式信息披露","id":"原则二渐进式信息披露","depth":2},{"value":"原则三：精益指令","id":"原则三精益指令","depth":2},{"value":"原则四：泛化 > 过拟合","id":"原则四泛化--过拟合","depth":2},{"value":"原则五：无惊喜原则","id":"原则五无惊喜原则","depth":2},{"value":"原则六：Description 要”适度激进”","id":"原则六description-要适度激进","depth":2},{"value":"六条原则之间的关系","id":"六条原则之间的关系","depth":2}],"children":[["$","$L3",null,{}],["$","$L4",null,{"metadata":{"title":"第 2 章 Skill 的设计哲学","filePath":"content/claude-skill/cognition/design-philosophy.md","timestamp":1778089813000},"sourceCode":"$5","children":["$L6","$L7"]}]]}]}],null,"$L8"]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"CR_c9URqh-5K47K_DC-c1"}
+6:["$","div",null,{"id":"nextra-skip-nav"}]
+9:T471,{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://inferloop.dev/claude-skill/cognition/design-philosophy#article","headline":"第 2 章 Skill 的设计哲学","description":"上个月我在一个代码审查 Skill 里写了这么一条：","inLanguage":"zh-CN","author":{"@type":"Person","name":"递归客"},"publisher":{"@type":"Organization","name":"InferLoop","url":"https://inferloop.dev"},"isPartOf":{"@type":"Book","name":"Claude Code Skill 指南","url":"https://inferloop.dev/claude-skill","image":"https://images.redream.cn/images/k6Sky9.png"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://inferloop.dev/claude-skill/cognition/design-philosophy"},"image":"https://images.redream.cn/images/k6Sky9.png"},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"首页","item":"https://inferloop.dev"},{"@type":"ListItem","position":2,"name":"Claude Code Skill 指南","item":"https://inferloop.dev/claude-skill"},{"@type":"ListItem","position":3,"name":"第 2 章 Skill 的设计哲学","item":"https://inferloop.dev/claude-skill/cognition/design-philosophy"}]}]}7:["$","main",null,{"data-pagefind-body":true,"children":[["$","script",null,{"type":"application/ld+json","dangerouslySetInnerHTML":{"__html":"$9"}}],[["$","h1",null,{"className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-bold x:mt-2 x:text-4xl","children":["第 2 章 Skill 的设计哲学","$undefined"]}],"\n",["$","h2",null,{"id":"一条被忽视的指令","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["一条被忽视的指令",["$","$La",null,{"id":"一条被忽视的指令"}]]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"上个月我在一个代码审查 Skill 里写了这么一条："}],"\n",["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lc",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":["$","span",null,{"children":"MUST ALWAYS check for null values before accessing nested properties."}]}]}]]}]]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"全大写，够醒目了吧？结果跑了十几轮测试，AI 该漏检的还是漏检。我甚至加了感叹号，加了”CRITICAL”前缀，毫无改善。"}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"我一开始觉得是模型不行。后来我把这条指令改成了："}],"\n",["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":["$Ld","$Le"]}],"$Lf"]}]]}],"\n","$L10","\n","$L11","\n","$L12","\n","$L13","\n","$L14","\n","$L15","\n","$L16","\n","$L17","\n","$L18","\n","$L19","\n","$L1a","\n","$L1b","\n","$L1c","\n","$L1d","\n","$L1e","\n","$L1f","\n","$L20","\n","$L21","\n","$L22","\n","$L23","\n","$L24","\n","$L25","\n","$L26","\n","$L27","\n","$L28","\n","$L29","\n","$L2a","\n","$L2b","\n","$L2c","\n","$L2d","\n","$L2e","\n","$L2f","\n","$L30","\n","$L31","\n","$L32","\n","$L33","\n","$L34","\n","$L35","\n","$L36","\n","$L37","\n","$L38","\n","$L39","\n","$L3a","\n","$L3b","\n","$L3c","\n","$L3d","\n","$L3e","\n","$L3f","\n","$L40","\n","$L41","\n","$L42","\n","$L43","\n","$L44","\n","$L45","\n","$L46","\n","$L47","\n","$L48","\n","$L49","\n","$L4a","\n","$L4b","\n","$L4c","\n","$L4d","\n","$L4e","\n","$L4f"]]}]
+8:["$","$L50",null,{"children":["$","$51",null,{"name":"Next.MetadataOutlet","children":"$@52"}]}]
+d:["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}]
+e:["$","$Lc",null,{"className":""}]
+f:["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"children":"访问嵌套属性前检查 null。我们的 production 代码里因为 `user.profile.avatar`"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"这类链式访问导致过 3 次 P0 事故，Sentry 上标记为 \"Cannot read property of undefined\"。"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"TypeScript 的可选链（?.）不够，因为我们需要在 null 时走降级逻辑而不是静默返回 undefined。"}]}]]}]
+10:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"效果立刻不一样了。AI 不仅开始检查 null，还能在某些场景下主动判断”这里其实不需要检查，因为上游已经做了校验”。"}]
+11:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这件事让我意识到：写 Skill 不是写规则手册。你面对的不是一个需要被条条框框约束的执行器，而是一个理解力很强、但完全没有你的业务上下文的同事。你不需要对他吼”必须这样做”，你需要告诉他”我们为什么这样做”。"}]
+12:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"skill-creator——Anthropic 官方出品的那个”用来创建 Skill 的 Skill”——在它自己的 SKILL.md 里把这条经验写得很直白："}]
+13:["$","blockquote",null,{"className":"x:not-first:mt-[1.25em] x:border-gray-300 x:italic x:text-gray-700 x:dark:border-gray-700 x:dark:text-gray-400 x:border-s-2 x:ps-[1.5em]","children":["\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["Try hard to explain the ",["$","strong",null,{"children":"why"}]," behind everything you’re asking the model to do. If you find yourself writing ALWAYS or NEVER in all caps, that’s a yellow flag — reframe and explain the reasoning."]}],"\n"]}]
+14:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这不是客气话。这是从大量迭代中沉淀出来的工程结论。本章要拆解的，就是 skill-creator 背后的六条设计原则。"}]
+15:["$","h2",null,{"id":"原则一theory-of-mind--rigid-rules","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["原则一：Theory of Mind > Rigid Rules",["$","$La",null,{"id":"原则一theory-of-mind--rigid-rules"}]]}]
+16:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"你可能在各种 prompt engineering 教程里见过这种写法："}]
+17:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lc",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-light-font-weight":"bold","--shiki-dark":"#79B8FF","--shiki-dark-font-weight":"bold"},"children":"## Rules"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"-"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" MUST use TypeScript strict mode"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"-"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" NEVER use any type"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"-"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" ALWAYS add error handling for async operations"}]]}]]}]]}]]}]
+18:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"早期模型对全大写确实更敏感。但现在的大模型——特别是经过 RLHF 对齐的模型——对这种命令式语气反而容易产生两个问题：一是注意力稀释，当你有 20 条 MUST 的时候，每条的权重都在下降；二是丧失灵活性，AI 会机械执行而不去判断上下文。"}]
+19:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"对比一下："}]
+1a:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lc",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"❌ MUST ALWAYS use try-catch for async operations"}]}]}]]}]]}]
+1b:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lc",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"✅ 用 try-catch 包裹异步操作。我们的错误监控（Sentry）只能捕获被 catch 的异常，"}]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"   未包裹的 Promise rejection 会变成沉默失败，运维团队看不到任何告警。"}]}]]}]]}]]}]
+1c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"第二种写法的好处不只是”更礼貌”。当 AI 知道原因是 Sentry 的捕获机制时，它能自己推断出：单元测试里的异步操作不需要 try-catch，因为测试框架有自己的错误处理；但 API handler 里的绝对要包裹，因为那是 Sentry 监控的核心路径。"}]
+1d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"你给了 why，AI 就能处理你没列举的边界情况。你只给了 what，AI 就只能做你说的那些——多一步不走，少一步不觉得有问题。"}]
+1e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"skill-creator 自己的 SKILL.md 有 470 多行，里面没有一个全大写的 MUST。它的每条指令都带着工程理由。比如它不是说”MUST run baseline tests”，而是解释为什么要跑基线：“The user is iterating on only a few examples…if the skill works only for those examples, it’s useless.”"}]
+1f:["$","h2",null,{"id":"原则二渐进式信息披露","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["原则二：渐进式信息披露",["$","$La",null,{"id":"原则二渐进式信息披露"}]]}]
+20:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"你不会在新同事入职第一天就把团队所有文档链接甩给他。你会先告诉他”我们是做什么的”，等他上手了再介绍代码规范，遇到具体问题了再指向架构文档。"}]
+21:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Skill 的加载机制也是这个思路，分三级："}]
+22:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"Level 1（始终在上下文里）"}],"：frontmatter 里的 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"name"}]," + ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"description"}],"，大约 100 词。AI 靠这一层决定要不要触发这个 Skill。"]}]
+23:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"Level 2（触发时加载）"}],"：SKILL.md 的正文，建议控制在 500 行以内。这是完整的工作指令。"]}]
+24:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"Level 3（按需加载）"}],"：",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"references/"}],"、",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"scripts/"}],"、",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"assets/"}]," 目录下的文件。用到才读，不用不碰。"]}]
+25:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lc",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"children":"my-skill/"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"├── SKILL.md          ← Level 1（frontmatter）+ Level 2（正文）"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"├── scripts/"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"│   └── aggregate.py  ← Level 3，执行时才加载"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"└── references/"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"    ├── aws.md        ← Level 3，处理 AWS 场景时才读"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"    └── gcp.md        ← Level 3，处理 GCP 场景时才读"}]}]]}]]}]]}]
+26:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这个分层的实际影响比你想的大。我见过有人写了 2000 行的 SKILL.md，把所有平台的配置说明、所有边界情况的处理方案全塞在正文里。结果比一个 300 行的精简版效果更差——不是因为内容有问题，是因为信息密度太高时，模型对关键指令的执行准确率会下降。"}]
+27:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["skill-creator 自身就是个好样本：它的 SKILL.md 控制在 500 行以内，但通过 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"agents/"}]," 目录下的 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"grader.md"}],"、",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"comparator.md"}],"、",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"analyzer.md"}]," 和 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"scripts/"}]," 目录下的评测脚本，支撑了一整套评测流水线。正文只说”什么时候读 agents/grader.md”，而不是把 grader 的全部逻辑内联进来。"]}]
+28:["$","h2",null,{"id":"原则三精益指令","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["原则三：精益指令",["$","$La",null,{"id":"原则三精益指令"}]]}]
+29:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"我有个习惯，写完 Skill 之后会去读 AI 的执行 transcript——不是只看最终输出，而是看它中间的推理过程和工具调用序列。"}]
+2a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"读 transcript 能发现两类问题："}]
+2b:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"第一类：AI 每次都自然做到了的事。"}]," 比如你写了”use proper indentation”，但 AI 生成代码时从来就没乱过缩进。这条指令占着 token，没产生任何价值。删掉。"]}]
+2c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"第二类：AI 每次都忽略了的事。"}]," 这时候本能反应是加粗、加大写、加感叹号。但正确做法是回到原则一——改写方式，解释原因，或者直接给一个输入输出的示例。"]}]
+2d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"代码里有个概念叫死代码（dead code），就是永远不会被执行到的分支。Skill 里也有”死指令”——AI 要么天然就会做、要么怎么强调都不做的指令。两种情况的处理一样：删掉。"}]
+2e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"skill-creator 的文档里有句话说得精准："}]
+2f:["$","blockquote",null,{"className":"x:not-first:mt-[1.25em] x:border-gray-300 x:italic x:text-gray-700 x:dark:border-gray-700 x:dark:text-gray-400 x:border-s-2 x:ps-[1.5em]","children":["\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Remove things that aren’t pulling their weight. Read the transcripts, not just the final outputs — if the skill is making the model waste time doing unproductive things, try getting rid of those parts."}],"\n"]}]
+30:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"fewer, better instructions often outperform exhaustive rules。这不是抽象道理，是从反复跑评测中得出的经验数据。"}]
+31:["$","h2",null,{"id":"原则四泛化--过拟合","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["原则四：泛化 > 过拟合",["$","$La",null,{"id":"原则四泛化--过拟合"}]]}]
+32:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"写过机器学习模型的人都知道过拟合的陷阱。Skill 开发有一模一样的问题。"}]
+33:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"典型场景：你写了 3 个测试用例，然后反复调 Skill 直到这 3 个用例完美通过。某个用例是关于 React useEffect 的，于是你加了一条："}]
+34:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lc",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"❌ 如果文件是 .tsx 且包含 useEffect，检查依赖数组是否完整"}]}]}]]}]]}]
+35:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这条指令对你那个测试用例确实管用。但你的 Skill 上线后会被调用无数次，面对的不只是 useEffect。useMemo、useCallback、自定义 Hooks 里的依赖声明都有同样的问题。正确的写法是："}]
+36:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lc",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"✅ 检查所有 React Hooks 的依赖声明是否完整。遗漏依赖会导致闭包陈旧（stale closure），"}]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"   组件拿到的是过期的 state 或 props 值，这类 bug 在 code review 里非常容易漏掉，"}]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"   因为代码表面上看不出任何问题。"}]}]]}]]}]]}]
+37:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"skill-creator 对这一点的表述很直接："}]
+38:["$","blockquote",null,{"className":"x:not-first:mt-[1.25em] x:border-gray-300 x:italic x:text-gray-700 x:dark:border-gray-700 x:dark:text-gray-400 x:border-s-2 x:ps-[1.5em]","children":["\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"We’re trying to create skills that can be used a million times across many different prompts. Rather than put in fiddly overfitty changes, if there’s some stubborn issue, try branching out and using different metaphors or recommending different patterns."}],"\n"]}]
+39:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"当某个测试用例失败时，不要急着加一条针对性修补。先问自己：这个失败暴露的根因是什么？能不能用一条更通用的指令覆盖这个问题以及它的同类问题？"}]
+3a:["$","h2",null,{"id":"原则五无惊喜原则","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["原则五：无惊喜原则",["$","$La",null,{"id":"原则五无惊喜原则"}]]}]
+3b:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这条说起来简单：Skill 的实际行为不应该让用户感到意外。"}]
+3c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"具体到工程层面有三个要求："}]
+3d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"描述和行为一致。"}]," 如果 description 说”审查代码质量”，Skill 就不应该偷偷去修改文件。如果 Skill 会调用外部 API（比如发消息到 Slack），必须在 description 里明确说明。"]}]
+3e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"不包含恶意代码。"}]," 这看起来是废话，但 Skill 生态一旦开放，就会有人尝试在 SKILL.md 里塞入 prompt injection。skill-creator 专门提到这一点：“skills must not contain malware, exploit code, or any content that could compromise system security.”"]}]
+3f:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"有副作用的操作要设防。"}]," Skill 配置里有个 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"disable-model-invocation: true"}]," 选项，用于防止 AI 在用户不知情的情况下自动触发某些 Skill。如果你的 Skill 会发邮件、写数据库、调用付费 API，考虑启用这个开关，让用户显式触发。"]}]
+40:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"无惊喜原则的本质是信任。用户把工作流交给 Skill，是因为他信任 Skill 会做且只做他预期的事。打破一次信任，用户就不会再用了。"}]
+41:["$","h2",null,{"id":"原则六description-要适度激进","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["原则六：Description 要”适度激进”",["$","$La",null,{"id":"原则六description-要适度激进"}]]}]
+42:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"大部分 Skill 的 description 写得太保守。比如："}]
+43:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lc",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"❌ description"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"A code review tool"}]]}]}]]}]]}]
+44:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这 5 个词传达的信息量太少，AI 在决定是否触发时很容易跳过它。用户说”帮我看看这个 PR 有没有问题”——AI 不觉得这和”a code review tool”有关。"}]
+45:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"更好的写法："}]
+46:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lc",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"✅ description"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":">"}]]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"    审查代码质量和安全性。当用户提到 review、审查、检查代码、"}]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"    看看这个 PR、帮我 check 一下、这段代码有没有问题时触发。"}]}]]}]]}]]}]
+47:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"skill-creator 在这一点上用了一个很准确的词——“pushy”："}]
+48:["$","blockquote",null,{"className":"x:not-first:mt-[1.25em] x:border-gray-300 x:italic x:text-gray-700 x:dark:border-gray-700 x:dark:text-gray-400 x:border-s-2 x:ps-[1.5em]","children":["\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Claude has a tendency to “undertrigger” skills. To combat this, make descriptions a little bit “pushy.”"}],"\n"]}]
+49:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"但”适度”两个字很关键。如果你写成”Use this for anything related to code”，那所有涉及代码的操作都会误触发你的 Skill，反而干扰正常工作流。"}]
+4a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"边界在哪？把你的 Skill 会处理的典型用户表述列出来，放进 description。但不要泛化到”所有跟代码有关的事”。description 不是广告语，是触发条件的声明。"}]
+4b:["$","h2",null,{"id":"六条原则之间的关系","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["六条原则之间的关系",["$","$La",null,{"id":"六条原则之间的关系"}]]}]
+4c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["这六条原则不是独立的清单，它们之间有一条暗线：",["$","strong",null,{"children":"写 Skill 就像带一个新加入团队的同事。"}]]}]
+4d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"你不会给新人一本 500 页的内部手册让他入职第一天全部读完——这是渐进式披露。你不会用全大写邮件命令他”MUST ALWAYS follow coding standards”——这是 Theory of Mind，你知道解释理由比发号施令更有效。你会根据他实际犯的错来调整带教重点，而不是事无巨细全部提前讲一遍——这是精益指令。你不会因为他在某个特定项目上犯了错就立一条只适用于那个项目的规矩——这是泛化。你不会让他做任何你没告诉他的事——这是无惊喜。你会清楚地告诉别人他能帮什么忙，让需要帮助的人能找到他——这是 description 的适度激进。"}]
+4e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"skill-creator 是这些原则最好的注脚。它是一个”创建 Skill 的 Skill”，自己就是自己的产物。它的 SKILL.md 不用全大写，解释每条指令的工程理由，正文控制在 500 行以内但通过引用文件支撑完整流程，持续在迭代中删减不起作用的指令。它不是在教你六条抽象原则，它是在用自己的存在证明这些原则确实管用。"}]
+4f:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"下一章我们进入动手环节——从零开始写一个能跑的 Skill。"}]
+52:null

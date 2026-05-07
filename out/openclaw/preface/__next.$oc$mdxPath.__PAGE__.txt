@@ -1,0 +1,85 @@
+1:"$Sreact.fragment"
+2:I[55169,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"TOCProvider"]
+3:I[769,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"Sidebar"]
+4:I[47486,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ClientWrapper"]
+1a:I[63894,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"HeadingAnchor"]
+1b:I[83987,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ToggleWordWrapButton"]
+1c:I[40493,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"CopyToClipboard"]
+1d:I[97367,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"OutletBoundary"]
+1e:"$Sreact.suspense"
+5:Td0c,# 前言 — 为什么要读一个 Agent 项目的源码
+
+OpenClaw 用五个月从零增长到 GitHub 上 Stars 最多的软件仓库。它的项目背景和发展历程，第 1 章会详细展开。
+
+这本书不关心 OpenClaw 的故事有多传奇。我们关心的是它的 140 万行 TypeScript 代码背后的工程决策。这些代码覆盖了构建一个工业级 Agent 系统需要面对的几乎所有核心问题：
+
+- 如何设计一个能同时接入 25 个消息平台的 Gateway？
+- 如何让 Agent 的"性格"和"能力"通过文件来定义，而不是硬编码？
+- 如何在 context window 有限的前提下，管理好长期记忆？
+- 如何让工具能力按需加载，而不是把所有东西塞进 prompt？
+- 如何在开放的 Skill 生态中防御恶意代码？
+
+这些问题，不是看几篇博客就能搞明白的。它们需要看实际的代码，看真实的设计取舍，看工程师在面对矛盾约束时做出的选择。
+
+这本书逐一拆解这些问题。
+
+## 源码与项目
+
+本书分析的是 OpenClaw（https://github.com/openclaw/openclaw）的源码，一个基于 MIT 协议开源的个人 AI 助手项目。书中所有源码引用都标注了文件路径和行号，建议 clone 源码仓库后对照阅读：
+
+```bash
+git clone https://github.com/openclaw/openclaw.git
+```
+
+本书基于 2026.4.x 版本。源码更新很快，具体实现可能变化，但核心架构和设计思路短期内不会有大的变动。
+
+Mini OpenClaw 实战项目的完整代码位于本书配套仓库中，可以直接下载运行。
+
+## 这本书怎么读
+
+这是一本源码解读，不是使用教程也不是 API 文档。我们要做的是：拆解每个关键子系统的设计动机和实现方式，讲清楚"为什么这么做"以及"代价是什么"。
+
+全书 34 章，体量不小。根据你的目标，推荐三条阅读路线：
+
+**快速了解路线**（适合需要概要理解的人）：
+ch01（全景）→ ch04（Gateway）→ ch09（工具系统）→ ch15（Memory）→ ch34（设计模式）
+
+**系统学习路线**（适合需要全面掌握的人）：
+顺序阅读第一到第七部分，跳过 ch20（Canvas）和 ch21（Voice）如果你的场景不需要可视化和语音交互。
+
+**动手实战路线**（适合先跑起来再说的人）：
+ch03（快速上手）→ ch29-33（Mini OpenClaw）→ ch27-28（开发 Skill 和 Channel）→ 按需回头读对应章节。
+
+各部分的定位：
+
+- **第一部分**（ch01-03）建立全局认知——项目背景、工程结构、本地跑起来
+- **第二到第四部分**（ch04-16）是核心内容——Gateway、Agent Runtime、Workspace Kernel 三大子系统的深度剖析
+- **第五到第六部分**（ch17-22）讲平台接入和交互前沿——多渠道、多 Agent、Canvas、Voice。其中 ch20 和 ch21 面向需要可视化/语音交互的读者，可按需跳过
+- **第七部分**（ch23-26）讨论安全和生产部署，用真实漏洞案例和攻击数据说明问题
+- **第八部分**（ch27-33）是全书的动手环节——开发 Skill、开发 Channel Extension、从零构建 Mini OpenClaw
+- **第九部分**（ch34）把全书提炼为 10 个可迁移的设计模式
+
+## 致谢
+
+感谢 Peter Steinberger 和 OpenClaw 社区的所有贡献者。开源让这样的学习成为可能。0:{"rsc":["$","$1","c",{"children":[["$","div",null,{"className":"x:mx-auto x:flex x:max-w-(--nextra-content-width)","children":["$","$L2",null,{"value":[{"value":"源码与项目","id":"源码与项目","depth":2},{"value":"这本书怎么读","id":"这本书怎么读","depth":2},{"value":"致谢","id":"致谢","depth":2}],"children":[["$","$L3",null,{}],["$","$L4",null,{"metadata":{"title":"前言 — 为什么要读一个 Agent 项目的源码","filePath":"content/openclaw/preface.md","timestamp":1778089813000},"sourceCode":"$5","children":[["$","div",null,{"id":"nextra-skip-nav"}],["$","main",null,{"data-pagefind-body":true,"children":[["$","script",null,{"type":"application/ld+json","dangerouslySetInnerHTML":{"__html":"{\"@context\":\"https://schema.org\",\"@graph\":[{\"@type\":\"TechArticle\",\"@id\":\"https://inferloop.dev/openclaw/preface#article\",\"headline\":\"前言 — 为什么要读一个 Agent 项目的源码\",\"description\":\"OpenClaw 用五个月从零增长到 GitHub 上 Stars 最多的软件仓库。它的项目背景和发展历程，第 1 章会详细展开。\",\"inLanguage\":\"zh-CN\",\"author\":{\"@type\":\"Person\",\"name\":\"递归客\"},\"publisher\":{\"@type\":\"Organization\",\"name\":\"InferLoop\",\"url\":\"https://inferloop.dev\"},\"isPartOf\":{\"@type\":\"Book\",\"name\":\"OpenClaw 源码解析\",\"url\":\"https://inferloop.dev/openclaw\",\"image\":\"https://images.redream.cn/images/9XtwZM.png\"},\"mainEntityOfPage\":{\"@type\":\"WebPage\",\"@id\":\"https://inferloop.dev/openclaw/preface\"},\"image\":\"https://images.redream.cn/images/9XtwZM.png\"},{\"@type\":\"BreadcrumbList\",\"itemListElement\":[{\"@type\":\"ListItem\",\"position\":1,\"name\":\"首页\",\"item\":\"https://inferloop.dev\"},{\"@type\":\"ListItem\",\"position\":2,\"name\":\"OpenClaw 源码解析\",\"item\":\"https://inferloop.dev/openclaw\"},{\"@type\":\"ListItem\",\"position\":3,\"name\":\"前言 — 为什么要读一个 Agent 项目的源码\",\"item\":\"https://inferloop.dev/openclaw/preface\"}]}]}"}}],[["$","h1",null,{"className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-bold x:mt-2 x:text-4xl","children":["前言 — 为什么要读一个 Agent 项目的源码","$undefined"]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"OpenClaw 用五个月从零增长到 GitHub 上 Stars 最多的软件仓库。它的项目背景和发展历程，第 1 章会详细展开。"}],"\n","$L6","\n","$L7","\n","$L8","\n","$L9","\n","$La","\n","$Lb","\n","$Lc","\n","$Ld","\n","$Le","\n","$Lf","\n","$L10","\n","$L11","\n","$L12","\n","$L13","\n","$L14","\n","$L15","\n","$L16","\n","$L17","\n","$L18"]]}]]}]]}]}],null,"$L19"]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"CR_c9URqh-5K47K_DC-c1"}
+6:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这本书不关心 OpenClaw 的故事有多传奇。我们关心的是它的 140 万行 TypeScript 代码背后的工程决策。这些代码覆盖了构建一个工业级 Agent 系统需要面对的几乎所有核心问题："}]
+7:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"如何设计一个能同时接入 25 个消息平台的 Gateway？"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"如何让 Agent 的”性格”和”能力”通过文件来定义，而不是硬编码？"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"如何在 context window 有限的前提下，管理好长期记忆？"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"如何让工具能力按需加载，而不是把所有东西塞进 prompt？"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"如何在开放的 Skill 生态中防御恶意代码？"}],"\n"]}]
+8:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这些问题，不是看几篇博客就能搞明白的。它们需要看实际的代码，看真实的设计取舍，看工程师在面对矛盾约束时做出的选择。"}]
+9:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这本书逐一拆解这些问题。"}]
+a:["$","h2",null,{"id":"源码与项目","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["源码与项目",["$","$L1a",null,{"id":"源码与项目"}]]}]
+b:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["本书分析的是 OpenClaw（",["$","a",null,{"href":"https://github.com/openclaw/openclaw%EF%BC%89%E7%9A%84%E6%BA%90%E7%A0%81%EF%BC%8C%E4%B8%80%E4%B8%AA%E5%9F%BA%E4%BA%8E","target":"_blank","rel":"noopener noreferrer","children":["https://github.com/openclaw/openclaw）的源码，一个基于",["$","svg",null,{"aria-hidden":true,"width":"0.85em","height":"0.85em","viewBox":"0 0 24 24","fill":"none","stroke":"currentColor","strokeWidth":"2","strokeLinecap":"round","strokeLinejoin":"round","style":{"display":"inline-block","marginLeft":"0.18em","marginRight":"0.05em","verticalAlign":"-0.08em","opacity":0.65},"children":[["$","path",null,{"d":"M7 17L17 7"}],["$","path",null,{"d":"M8 7h9v9"}]]}]]}]," MIT 协议开源的个人 AI 助手项目。书中所有源码引用都标注了文件路径和行号，建议 clone 源码仓库后对照阅读："]}]
+c:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L1b",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L1c",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"git"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" clone"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" https://github.com/openclaw/openclaw.git"}]]}]}]]}]]}]
+d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"本书基于 2026.4.x 版本。源码更新很快，具体实现可能变化，但核心架构和设计思路短期内不会有大的变动。"}]
+e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Mini OpenClaw 实战项目的完整代码位于本书配套仓库中，可以直接下载运行。"}]
+f:["$","h2",null,{"id":"这本书怎么读","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["这本书怎么读",["$","$L1a",null,{"id":"这本书怎么读"}]]}]
+10:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这是一本源码解读，不是使用教程也不是 API 文档。我们要做的是：拆解每个关键子系统的设计动机和实现方式，讲清楚”为什么这么做”以及”代价是什么”。"}]
+11:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"全书 34 章，体量不小。根据你的目标，推荐三条阅读路线："}]
+12:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"快速了解路线"}],"（适合需要概要理解的人）：\nch01（全景）→ ch04（Gateway）→ ch09（工具系统）→ ch15（Memory）→ ch34（设计模式）"]}]
+13:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"系统学习路线"}],"（适合需要全面掌握的人）：\n顺序阅读第一到第七部分，跳过 ch20（Canvas）和 ch21（Voice）如果你的场景不需要可视化和语音交互。"]}]
+14:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"动手实战路线"}],"（适合先跑起来再说的人）：\nch03（快速上手）→ ch29-33（Mini OpenClaw）→ ch27-28（开发 Skill 和 Channel）→ 按需回头读对应章节。"]}]
+15:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"各部分的定位："}]
+16:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"第一部分"}],"（ch01-03）建立全局认知——项目背景、工程结构、本地跑起来"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"第二到第四部分"}],"（ch04-16）是核心内容——Gateway、Agent Runtime、Workspace Kernel 三大子系统的深度剖析"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"第五到第六部分"}],"（ch17-22）讲平台接入和交互前沿——多渠道、多 Agent、Canvas、Voice。其中 ch20 和 ch21 面向需要可视化/语音交互的读者，可按需跳过"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"第七部分"}],"（ch23-26）讨论安全和生产部署，用真实漏洞案例和攻击数据说明问题"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"第八部分"}],"（ch27-33）是全书的动手环节——开发 Skill、开发 Channel Extension、从零构建 Mini OpenClaw"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"第九部分"}],"（ch34）把全书提炼为 10 个可迁移的设计模式"]}],"\n"]}]
+17:["$","h2",null,{"id":"致谢","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["致谢",["$","$L1a",null,{"id":"致谢"}]]}]
+18:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"感谢 Peter Steinberger 和 OpenClaw 社区的所有贡献者。开源让这样的学习成为可能。"}]
+19:["$","$L1d",null,{"children":["$","$1e",null,{"name":"Next.MetadataOutlet","children":"$@1f"}]}]
+1f:null

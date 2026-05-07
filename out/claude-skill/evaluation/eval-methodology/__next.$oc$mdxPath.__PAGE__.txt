@@ -1,0 +1,426 @@
+1:"$Sreact.fragment"
+2:I[55169,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"TOCProvider"]
+3:I[769,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"Sidebar"]
+4:I[47486,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ClientWrapper"]
+a:I[63894,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"HeadingAnchor"]
+b:I[83987,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ToggleWordWrapButton"]
+c:I[40493,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"CopyToClipboard"]
+5f:I[97367,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"OutletBoundary"]
+60:"$Sreact.suspense"
+5:T38ea,# 评测体系的完整方法论
+
+## 对比式评测
+
+第 4 章讲过一个核心公式：
+
+**Skill 价值 = 有 Skill 时的表现 - 没有 Skill 时的表现**
+
+方法论的第一条：每个 eval 必须同时跑 with_skill 和 without_skill，不能只跑一个。
+
+跑完之后的产出放在固定的目录结构里：
+
+```
+eval-results/
+  iteration-1/
+    eval-detect-missing-header/
+      with_skill/
+        outputs/
+          transcript.json    # AI 的完整对话记录
+          result.md          # AI 的最终输出
+        grading.json         # 断言评判结果
+      without_skill/
+        outputs/
+          transcript.json
+          result.md
+        grading.json
+    eval-fix-wrong-year/
+      with_skill/
+        ...
+      without_skill/
+        ...
+    summary.json             # 本轮汇总：pass_rate、delta、失败断言列表
+  iteration-2/
+    ...
+```
+
+为什么要这个结构？因为你会反复迭代。第一轮 eval 发现 pass_rate 只有 0.60，改了 Skill 再跑第二轮变成 0.75，再改再跑第三轮到 0.90。每一轮的结果都需要留存，这样你才能看到趋势，而不是每次都在猜"上次好像是 0.7 来着"。
+
+`summary.json` 的结构很简单：
+
+```json
+{
+  "iteration": 1,
+  "date": "2025-04-01",
+  "skill_version": "abc1234",
+  "results": {
+    "with_skill": { "total": 10, "passed": 8, "pass_rate": 0.80 },
+    "without_skill": { "total": 10, "passed": 4, "pass_rate": 0.40 },
+    "delta": 0.40
+  },
+  "failed_assertions": [
+    { "eval": "complex-pr", "assertion": "指出未处理的 Promise rejection", "reason": "AI 提到了错误处理但未定位到具体行号" }
+  ]
+}
+```
+
+## 双角色评测
+
+跑完 eval 得到 AI 的输出，你需要评判它。这里有两个容易忽略的层面。
+
+### 角色一：评输出质量（Grader）
+
+这是直觉上的评测——AI 的输出对不对。
+
+给 grader 的输入是：eval 的 prompt + AI 的输出 + 断言列表。grader 逐条判断每个断言是否通过。
+
+```
+断言："输出中包含 src/utils/format.ts"
+AI 输出："检查发现以下文件缺少 header：src/utils/format.ts, src/components/Button.tsx"
+判定：PASS
+```
+
+这个角色可以由 LLM 自动完成。大部分断言是客观的——输出里有没有某个文件名、有没有提到某个安全风险、格式对不对。
+
+#### Grader 的 7 步流程
+
+skill-creator 里的 grader 子代理把评测拆成了严格的 7 步，每一步都有明确的产出：
+
+1. **读完整 transcript**——不是只看最终输出，而是看 AI 的整个推理过程。如果 AI 走了弯路但碰巧得到了正确答案，grader 要能发现这一点。只看结果不看过程，等于放过了一个定时炸弹。
+2. **检查实际输出**——对照用户的期望，逐项核对。输出里该有的东西有没有，不该有的东西有没有混进来。
+3. **评判每条断言**——Pass 还是 Fail，必须给出具体 evidence。"看起来不错"不算 evidence，"输出第 3 行包含了预期的函数签名 `async function deploy(config: DeployConfig)`"才算。没有 evidence 的 Pass 和没评一样。
+4. **提取额外发现**——断言没覆盖到但 grader 注意到的问题。比如 AI 输出了一段不相关的警告信息，或者漏掉了一个边界情况。这些发现会反馈到下一轮断言设计中。
+5. **检查执行者备注**——如果 AI 在执行过程中留下了备注（"这个 API 似乎已经废弃了"），grader 要纳入考量。这些备注有时候比最终输出更有信息量。
+6. **批判断言质量**——这条断言是不是太弱了？是不是永远都会通过？是不是在测试实现细节而非行为？这一步是整个设计的点睛之笔。没有它，你可能写了一堆永远绿灯的断言，自我感觉良好，实际上什么都没测出来。
+7. **写评测报告**——结构化输出，供 aggregate_benchmark.py 后续聚合。报告格式固定，包含每条断言的判定、evidence、额外发现、断言质量评价。
+
+第 6 步值得展开说。常见的弱断言有三种模式：
+- **永真断言**："输出包含文本"——只要 AI 说了任何话就通过
+- **格式依赖断言**："第三行是 XXX"——输出多加一行空行就挂了，测的是格式而非语义
+- **模糊断言**："输出的建议是有用的"——grader 自己也说不清什么叫"有用"
+
+grader 标记出这些问题之后，你在下一轮迭代时修正断言，再重跑 eval。断言质量和 Skill 质量是同步提升的。
+
+### 角色二：评断言质量（Meta-Grader）
+
+这个角色更重要也更容易被忽略。
+
+你写的断言本身靠谱吗？
+
+三种常见问题：
+
+**断言太弱**："输出中包含代码审查结果"——AI 只要说了任何跟 review 相关的话就通过了。这种断言通过了也不说明什么。
+
+**断言太强**："输出的第三行必须是 `src/utils/format.ts:1 - Missing license header`"——格式稍有变化就失败。你在测 Skill 还是在测 AI 的格式精确度？
+
+**断言不可验证**："输出的建议是有用的"——什么叫"有用"？grader 也说不清。
+
+Meta-grader 的工作是标记这些有问题的断言，然后你人工修正。这个步骤在第一轮 eval 时尤其重要——你对断言质量的判断会随着经验积累而提升，但一开始写的断言大概率有问题。
+
+为什么需要双角色？防止"假阳性自信"。如果你的断言太弱，pass_rate 会虚高。你看到 0.90 以为 Skill 很好，实际上是断言没有区分度。
+
+## 盲比（Comparator）
+
+你改了 Skill，跑了一轮 eval，pass_rate 从 0.80 升到了 0.85。很好。但 pass_rate 只测客观指标——断言通过了几条。有些质量维度不好用断言表达：输出的组织是否清晰？建议是否具体到可以直接操作？语气是否符合团队风格？
+
+盲比解决这个问题。
+
+做法：把 with_skill 和 without_skill 的两个输出匿名呈现给评审者（可以是人，也可以是 LLM），标记为"输出 A"和"输出 B"。评审者不知道哪个是加了 Skill 的。
+
+评分维度：
+
+| 维度 | 子项 | 说明 |
+|------|------|------|
+| 内容 | 正确性 | 指出的问题是否真实存在 |
+| 内容 | 完整性 | 是否覆盖了所有应检查的点 |
+| 内容 | 准确性 | 文件路径、行号是否准确 |
+| 结构 | 组织 | 问题是否分类清晰 |
+| 结构 | 格式 | 是否易于阅读和后续处理 |
+| 结构 | 可操作性 | 看完能不能直接改代码 |
+
+评完分之后再揭示来源。如果匿名状态下评审者一致选了"输出 A 更好"，揭示后发现 A 是 with_skill 的——Skill 有效。如果选的是 without_skill 的——你的 Skill 可能在帮倒忙。
+
+盲比消除的偏差很重要。人有一个倾向：自己改过的东西总觉得更好。你花了两小时调 Skill 的指令措辞，下意识会觉得改完的输出"明显好多了"。盲比让你诚实面对结果。
+
+### Comparator 的评分标准
+
+分维度评分不是随便分的。内容维度和结构维度各自回答一个核心问题：
+
+**内容维度——"说的对不对？"**
+
+| 子项 | 评判标准 | 典型失分场景 |
+|------|----------|------------|
+| 正确性 | 指出的问题是否真实存在，有没有无中生有 | AI 把合理的代码标记为 bug |
+| 完整性 | 是否覆盖了所有应检查的点，有没有遗漏关键问题 | 安全漏洞没被发现 |
+| 准确性 | 文件路径、行号、变量名是否准确 | 路径写错、行号偏移 |
+
+**结构维度——"好不好用？"**
+
+| 子项 | 评判标准 | 典型失分场景 |
+|------|----------|------------|
+| 组织 | 问题是否分类清晰，有没有逻辑分组 | 所有问题堆在一起没有分类 |
+| 格式 | 是否易于阅读和后续处理（复制、搜索） | 纯文本墙，没有代码块标记 |
+| 可操作性 | 看完能不能直接改代码，而不是还要去查文档 | "建议优化性能"但不说怎么优化 |
+
+为什么要分两个维度？因为改进 Skill 时经常出现此消彼长的情况。你改了 prompt 措辞让 AI 更精确地定位问题（内容维度提升），但输出变成了密密麻麻的技术术语堆砌（结构维度下降）。单一分数会掩盖这种退步，分维度评分能把它暴露出来。
+
+comparator 对每个维度分别给出 A/B 的优劣判定和理由。最终汇总时，如果两个维度方向一致（A 在内容和结构上都更好），结论很清晰；如果方向相反，就需要人工权衡——这个 Skill 的使用场景更看重正确性还是可读性？
+
+## 模式分析（Analyzer）
+
+grader 和 comparator 回答的是"这一轮 eval 结果怎么样"。但跑了三五轮之后，你需要回答一个更高层的问题：**跨轮次看，有没有反复出现的模式？**
+
+这就是 analyzer 的工作。它是 skill-creator 的 agents/ 目录下第三个子代理，做的是事后的模式识别。
+
+analyzer 的输入是多轮 eval 的汇总数据（summary.json）和 grader 报告。它要找的东西包括：
+
+- **顽固断言**：连续三轮都失败的同一条断言。这说明当前的 SKILL.md 指令在某个方向上有结构性缺陷，小修小补解决不了，需要重新审视 Skill 的设计思路。
+- **退步模式**：第 N 轮通过了但第 N+1 轮又失败的断言。这说明你的修改引入了回归，得检查两轮之间改了什么。
+- **弱断言集中区**：grader 标记为"太弱"的断言如果集中在某一类测试用例上，说明你对这类场景的预期定义不够清晰。
+- **维度偏科**：如果内容维度持续提升但结构维度持续下降，说明你在迭代中只关注了"说对"而忽略了"说好"。
+
+analyzer 的输出是一份诊断报告，指出最需要关注的 2-3 个模式，并给出改进方向的建议。注意它只给方向，不给具体的 SKILL.md 修改——具体怎么改是你的决策，analyzer 只负责把问题摆到台面上。
+
+这个角色在前两轮 eval 时用处不大（数据太少），但从第三轮开始价值会明显体现。如果你发现自己在第五轮还在跟同一个问题纠缠，大概率是因为没有跳出来看模式。
+
+## 人工审查补位
+
+自动 eval 抓客观问题：断言通过没有、格式对不对、有没有遗漏的检查项。
+
+但有一类问题自动 eval 抓不到：**技术正确但没用**。
+
+AI 审查一段代码，指出"这个函数的圈复杂度是 15"。从技术上说完全正确。但作为 review 意见，这句话毫无意义——开发者需要知道的是"这个函数需要拆分，建议把验证逻辑提取到 `validateInput()` 中"。
+
+人工审查就是补这个缺口。review 最近 5 次 eval 的输出，找那些"断言通过了但其实不够好"的地方。
+
+人工反馈的格式要具体、可操作：
+
+```
+eval: complex-pr
+问题：AI 指出了 3 个正确的问题，但建议太笼统。
+具体："建议添加错误处理" → 应该说 "在 fetchUser() 的 catch 块中，
+建议将 error 上报到 Sentry 而不是只 console.log，参考 known-pitfalls.md 中的监控规范"。
+操作：在 SKILL.md 中加一条指令 —— "给出修复建议时，指出具体的修改方式和引用的团队规范"。
+```
+
+## 迭代改进循环
+
+评测不是一次性的。改 Skill → 跑 eval → 看结果 → 再改 → 再跑。这个循环什么时候停？
+
+信号源有三个：
+
+1. **失败的断言**：最直接。哪条断言没通过，去看 AI 的输出到底差在哪
+2. **人工反馈**：断言通过了但人觉得不够好的地方
+3. **transcript**：AI 的推理过程。有时候输出正确但推理路径错误——这次碰巧对了，下次不一定
+
+把这三个信号喂给 LLM，让它生成改进建议：
+
+```
+以下是 code-review Skill 的当前 eval 结果：
+- 失败断言：[列表]
+- 人工反馈：[列表]
+- transcript 中的异常推理：[列表]
+
+请分析这些信号，给出具体的 SKILL.md 修改建议。
+```
+
+LLM 给出的建议不一定全对，但它能帮你快速定位方向。改完之后在 iteration-N+1 重跑 eval。
+
+停止条件：
+
+- 连续两轮人工反馈为空（没有新的改进点）
+- pass_rate 连续两轮无显著提升（波动在 0.02 以内）
+- delta 已经足够大（比如 with_skill 比 without_skill 高 0.30 以上）
+
+到了这个阶段，Skill 就进入维护期了。不需要持续迭代，只需要在业务变化时更新规则，然后跑一轮 eval 确认没退化。
+
+## 实战：为 code-review 编写完整 evals.json
+
+```json
+[
+  {
+    "name": "simple-function",
+    "description": "审查一个简单的工具函数",
+    "prompt": "review src/utils/formatCurrency.ts",
+    "workspace": "test-simple-function",
+    "assertions": [
+      "指出函数缺少对 NaN 输入的处理",
+      "指出函数没有处理负数的显示格式",
+      "不误报：函数命名符合 camelCase 规范"
+    ]
+  },
+  {
+    "name": "complex-pr",
+    "description": "审查一个涉及多文件的 PR",
+    "prompt": "review 当前 PR 的所有变更",
+    "workspace": "test-complex-pr",
+    "assertions": [
+      "检查了所有变更文件，不遗漏",
+      "指出 src/api/userService.ts 中的未处理 Promise rejection",
+      "指出 src/hooks/useData.ts 中 useEffect 缺少依赖数组",
+      "按文件分组输出，不是一整坨"
+    ]
+  },
+  {
+    "name": "security-vuln",
+    "description": "审查包含安全漏洞的代码",
+    "prompt": "review src/components/CommentBox.tsx",
+    "workspace": "test-security-vuln",
+    "assertions": [
+      "指出 dangerouslySetInnerHTML 的 XSS 风险",
+      "给出具体的修复方式（使用 DOMPurify）",
+      "说明风险场景（用户可以注入恶意脚本）"
+    ]
+  },
+  {
+    "name": "react-component",
+    "description": "审查一个 React 组件",
+    "prompt": "review src/components/UserProfile.tsx",
+    "workspace": "test-react-component",
+    "assertions": [
+      "指出组件中使用了 any 类型",
+      "指出 useEffect 的清理函数缺失（存在内存泄漏风险）",
+      "给出的类型建议是具体的接口定义，不是泛泛的'请加类型'"
+    ]
+  }
+]
+```
+
+四个测试用例，覆盖四种典型场景：简单函数、复杂 PR、安全漏洞、React 组件。每个用例 3-4 条断言，总共 14 条。
+
+注意第三条断言的写法——"不误报"也是一种断言。你不仅要测 AI 能找到问题，还要测它不会无中生有。一个把所有代码都标红的 linter 没有价值。0:{"rsc":["$","$1","c",{"children":[["$","div",null,{"className":"x:mx-auto x:flex x:max-w-(--nextra-content-width)","children":["$","$L2",null,{"value":[{"value":"对比式评测","id":"对比式评测","depth":2},{"value":"双角色评测","id":"双角色评测","depth":2},{"value":"角色一：评输出质量（Grader）","id":"角色一评输出质量grader","depth":3},{"value":"Grader 的 7 步流程","id":"grader-的-7-步流程","depth":4},{"value":"角色二：评断言质量（Meta-Grader）","id":"角色二评断言质量meta-grader","depth":3},{"value":"盲比（Comparator）","id":"盲比comparator","depth":2},{"value":"Comparator 的评分标准","id":"comparator-的评分标准","depth":3},{"value":"模式分析（Analyzer）","id":"模式分析analyzer","depth":2},{"value":"人工审查补位","id":"人工审查补位","depth":2},{"value":"迭代改进循环","id":"迭代改进循环","depth":2},{"value":"实战：为 code-review 编写完整 evals.json","id":"实战为-code-review-编写完整-evalsjson","depth":2}],"children":[["$","$L3",null,{}],["$","$L4",null,{"metadata":{"title":"评测体系的完整方法论","filePath":"content/claude-skill/evaluation/eval-methodology.md","timestamp":1778089813000},"sourceCode":"$5","children":["$L6","$L7"]}]]}]}],null,"$L8"]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"CR_c9URqh-5K47K_DC-c1"}
+6:["$","div",null,{"id":"nextra-skip-nav"}]
+9:T453,{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://inferloop.dev/claude-skill/evaluation/eval-methodology#article","headline":"评测体系的完整方法论","description":"第 4 章讲过一个核心公式：","inLanguage":"zh-CN","author":{"@type":"Person","name":"递归客"},"publisher":{"@type":"Organization","name":"InferLoop","url":"https://inferloop.dev"},"isPartOf":{"@type":"Book","name":"Claude Code Skill 指南","url":"https://inferloop.dev/claude-skill","image":"https://images.redream.cn/images/k6Sky9.png"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://inferloop.dev/claude-skill/evaluation/eval-methodology"},"image":"https://images.redream.cn/images/k6Sky9.png"},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"首页","item":"https://inferloop.dev"},{"@type":"ListItem","position":2,"name":"Claude Code Skill 指南","item":"https://inferloop.dev/claude-skill"},{"@type":"ListItem","position":3,"name":"评测体系的完整方法论","item":"https://inferloop.dev/claude-skill/evaluation/eval-methodology"}]}]}7:["$","main",null,{"data-pagefind-body":true,"children":[["$","script",null,{"type":"application/ld+json","dangerouslySetInnerHTML":{"__html":"$9"}}],[["$","h1",null,{"className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-bold x:mt-2 x:text-4xl","children":["评测体系的完整方法论","$undefined"]}],"\n",["$","h2",null,{"id":"对比式评测","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["对比式评测",["$","$La",null,{"id":"对比式评测"}]]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"第 4 章讲过一个核心公式："}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"Skill 价值 = 有 Skill 时的表现 - 没有 Skill 时的表现"}]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"方法论的第一条：每个 eval 必须同时跑 with_skill 和 without_skill，不能只跑一个。"}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"跑完之后的产出放在固定的目录结构里："}],"\n",["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lc",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"children":"eval-results/"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"  iteration-1/"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"    eval-detect-missing-header/"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"      with_skill/"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"        outputs/"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"          transcript.json    # AI 的完整对话记录"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"          result.md          # AI 的最终输出"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"        grading.json         # 断言评判结果"}]}],"\n",["$","span",null,{"children":"$Ld"}],"\n","$Le","\n","$Lf","\n","$L10","\n","$L11","\n","$L12","\n","$L13","\n","$L14","\n","$L15","\n","$L16","\n","$L17","\n","$L18","\n","$L19"]}]]}]]}],"\n","$L1a","\n","$L1b","\n","$L1c","\n","$L1d","\n","$L1e","\n","$L1f","\n","$L20","\n","$L21","\n","$L22","\n","$L23","\n","$L24","\n","$L25","\n","$L26","\n","$L27","\n","$L28","\n","$L29","\n","$L2a","\n","$L2b","\n","$L2c","\n","$L2d","\n","$L2e","\n","$L2f","\n","$L30","\n","$L31","\n","$L32","\n","$L33","\n","$L34","\n","$L35","\n","$L36","\n","$L37","\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n","$L38","\n","$L39","\n","$L3a","\n","$L3b","\n","$L3c","\n","$L3d","\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n","$L3e","\n","$L3f","\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n","$L40","\n","$L41","\n","$L42","\n","$L43","\n","$L44","\n","$L45","\n","$L46","\n","$L47","\n","$L48","\n","$L49","\n","$L4a","\n","$L4b","\n","$L4c","\n","$L4d","\n","$L4e","\n","$L4f","\n","$L50","\n","$L51","\n","$L52","\n","$L53","\n","$L54","\n","$L55","\n","$L56","\n","$L57","\n","$L58","\n","$L59","\n","$L5a","\n","$L5b","\n","$L5c","\n","$L5d","\n","$L5e"]]}]
+8:["$","$L5f",null,{"children":["$","$60",null,{"name":"Next.MetadataOutlet","children":"$@61"}]}]
+d:["$","span",null,{"children":"      without_skill/"}]
+e:["$","span",null,{"children":["$","span",null,{"children":"        outputs/"}]}]
+f:["$","span",null,{"children":["$","span",null,{"children":"          transcript.json"}]}]
+10:["$","span",null,{"children":["$","span",null,{"children":"          result.md"}]}]
+11:["$","span",null,{"children":["$","span",null,{"children":"        grading.json"}]}]
+12:["$","span",null,{"children":["$","span",null,{"children":"    eval-fix-wrong-year/"}]}]
+13:["$","span",null,{"children":["$","span",null,{"children":"      with_skill/"}]}]
+14:["$","span",null,{"children":["$","span",null,{"children":"        ..."}]}]
+15:["$","span",null,{"children":["$","span",null,{"children":"      without_skill/"}]}]
+16:["$","span",null,{"children":["$","span",null,{"children":"        ..."}]}]
+17:["$","span",null,{"children":["$","span",null,{"children":"    summary.json             # 本轮汇总：pass_rate、delta、失败断言列表"}]}]
+18:["$","span",null,{"children":["$","span",null,{"children":"  iteration-2/"}]}]
+19:["$","span",null,{"children":["$","span",null,{"children":"    ..."}]}]
+1a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"为什么要这个结构？因为你会反复迭代。第一轮 eval 发现 pass_rate 只有 0.60，改了 Skill 再跑第二轮变成 0.75，再改再跑第三轮到 0.90。每一轮的结果都需要留存，这样你才能看到趋势，而不是每次都在猜”上次好像是 0.7 来着”。"}]
+1b:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","code",null,{"className":"nextra-code","dir":"ltr","children":"summary.json"}]," 的结构很简单："]}]
+1c:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lc",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"{"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"  \"iteration\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"1"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"  \"date\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"2025-04-01\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"  \"skill_version\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"abc1234\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"  \"results\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": {"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"with_skill\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": { "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"\"total\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"10"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":", "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"\"passed\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"8"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":", "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"\"pass_rate\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"0.80"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" },"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"without_skill\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": { "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"\"total\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"10"}],"$L62","$L63","$L64","$L65","$L66","$L67","$L68","$L69","$L6a"]}],"\n","$L6b","\n","$L6c","\n","$L6d","\n","$L6e","\n","$L6f","\n","$L70"]}]]}]]}]
+1d:["$","h2",null,{"id":"双角色评测","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["双角色评测",["$","$La",null,{"id":"双角色评测"}]]}]
+1e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"跑完 eval 得到 AI 的输出，你需要评判它。这里有两个容易忽略的层面。"}]
+1f:["$","h3",null,{"id":"角色一评输出质量grader","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["角色一：评输出质量（Grader）",["$","$La",null,{"id":"角色一评输出质量grader"}]]}]
+20:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这是直觉上的评测——AI 的输出对不对。"}]
+21:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"给 grader 的输入是：eval 的 prompt + AI 的输出 + 断言列表。grader 逐条判断每个断言是否通过。"}]
+22:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lc",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"children":"断言：\"输出中包含 src/utils/format.ts\""}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"AI 输出：\"检查发现以下文件缺少 header：src/utils/format.ts, src/components/Button.tsx\""}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"判定：PASS"}]}]]}]]}]]}]
+23:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这个角色可以由 LLM 自动完成。大部分断言是客观的——输出里有没有某个文件名、有没有提到某个安全风险、格式对不对。"}]
+24:["$","h4",null,{"id":"grader-的-7-步流程","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-xl","children":["Grader 的 7 步流程",["$","$La",null,{"id":"grader-的-7-步流程"}]]}]
+25:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"skill-creator 里的 grader 子代理把评测拆成了严格的 7 步，每一步都有明确的产出："}]
+26:["$","ol",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-decimal x:ms-6","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"读完整 transcript"}],"——不是只看最终输出，而是看 AI 的整个推理过程。如果 AI 走了弯路但碰巧得到了正确答案，grader 要能发现这一点。只看结果不看过程，等于放过了一个定时炸弹。"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"检查实际输出"}],"——对照用户的期望，逐项核对。输出里该有的东西有没有，不该有的东西有没有混进来。"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"评判每条断言"}],"——Pass 还是 Fail，必须给出具体 evidence。“看起来不错”不算 evidence，“输出第 3 行包含了预期的函数签名 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"async function deploy(config: DeployConfig)"}],"”才算。没有 evidence 的 Pass 和没评一样。"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"提取额外发现"}],"——断言没覆盖到但 grader 注意到的问题。比如 AI 输出了一段不相关的警告信息，或者漏掉了一个边界情况。这些发现会反馈到下一轮断言设计中。"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"检查执行者备注"}],"——如果 AI 在执行过程中留下了备注（“这个 API 似乎已经废弃了”），grader 要纳入考量。这些备注有时候比最终输出更有信息量。"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"批判断言质量"}],"——这条断言是不是太弱了？是不是永远都会通过？是不是在测试实现细节而非行为？这一步是整个设计的点睛之笔。没有它，你可能写了一堆永远绿灯的断言，自我感觉良好，实际上什么都没测出来。"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"写评测报告"}],"——结构化输出，供 aggregate_benchmark.py 后续聚合。报告格式固定，包含每条断言的判定、evidence、额外发现、断言质量评价。"]}],"\n"]}]
+27:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"第 6 步值得展开说。常见的弱断言有三种模式："}]
+28:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"永真断言"}],"：“输出包含文本”——只要 AI 说了任何话就通过"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"格式依赖断言"}],"：“第三行是 XXX”——输出多加一行空行就挂了，测的是格式而非语义"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"模糊断言"}],"：“输出的建议是有用的”——grader 自己也说不清什么叫”有用”"]}],"\n"]}]
+29:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"grader 标记出这些问题之后，你在下一轮迭代时修正断言，再重跑 eval。断言质量和 Skill 质量是同步提升的。"}]
+2a:["$","h3",null,{"id":"角色二评断言质量meta-grader","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["角色二：评断言质量（Meta-Grader）",["$","$La",null,{"id":"角色二评断言质量meta-grader"}]]}]
+2b:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这个角色更重要也更容易被忽略。"}]
+2c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"你写的断言本身靠谱吗？"}]
+2d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"三种常见问题："}]
+2e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"断言太弱"}],"：“输出中包含代码审查结果”——AI 只要说了任何跟 review 相关的话就通过了。这种断言通过了也不说明什么。"]}]
+2f:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"断言太强"}],"：“输出的第三行必须是 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/utils/format.ts:1 - Missing license header"}],"”——格式稍有变化就失败。你在测 Skill 还是在测 AI 的格式精确度？"]}]
+30:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"断言不可验证"}],"：“输出的建议是有用的”——什么叫”有用”？grader 也说不清。"]}]
+31:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Meta-grader 的工作是标记这些有问题的断言，然后你人工修正。这个步骤在第一轮 eval 时尤其重要——你对断言质量的判断会随着经验积累而提升，但一开始写的断言大概率有问题。"}]
+32:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"为什么需要双角色？防止”假阳性自信”。如果你的断言太弱，pass_rate 会虚高。你看到 0.90 以为 Skill 很好，实际上是断言没有区分度。"}]
+33:["$","h2",null,{"id":"盲比comparator","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["盲比（Comparator）",["$","$La",null,{"id":"盲比comparator"}]]}]
+34:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"你改了 Skill，跑了一轮 eval，pass_rate 从 0.80 升到了 0.85。很好。但 pass_rate 只测客观指标——断言通过了几条。有些质量维度不好用断言表达：输出的组织是否清晰？建议是否具体到可以直接操作？语气是否符合团队风格？"}]
+35:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"盲比解决这个问题。"}]
+36:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"做法：把 with_skill 和 without_skill 的两个输出匿名呈现给评审者（可以是人，也可以是 LLM），标记为”输出 A”和”输出 B”。评审者不知道哪个是加了 Skill 的。"}]
+37:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"评分维度："}]
+38:["$","table",null,{"className":"x:block x:overflow-x-auto nextra-scrollbar x:not-first:mt-[1.25em] x:p-0","children":[["$","thead",null,{"children":["$","tr",null,{"children":[["$","th",null,{"children":"维度","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"子项","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"说明","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]}],["$","tbody",null,{"children":[["$","tr",null,{"children":[["$","td",null,{"children":"内容","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"正确性","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"指出的问题是否真实存在","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"内容","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"完整性","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"是否覆盖了所有应检查的点","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"内容","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"准确性","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"文件路径、行号是否准确","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"结构","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"组织","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"问题是否分类清晰","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"结构","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"格式","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"是否易于阅读和后续处理","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"结构","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"可操作性","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"看完能不能直接改代码","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]]}]]}]
+39:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"评完分之后再揭示来源。如果匿名状态下评审者一致选了”输出 A 更好”，揭示后发现 A 是 with_skill 的——Skill 有效。如果选的是 without_skill 的——你的 Skill 可能在帮倒忙。"}]
+3a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"盲比消除的偏差很重要。人有一个倾向：自己改过的东西总觉得更好。你花了两小时调 Skill 的指令措辞，下意识会觉得改完的输出”明显好多了”。盲比让你诚实面对结果。"}]
+3b:["$","h3",null,{"id":"comparator-的评分标准","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["Comparator 的评分标准",["$","$La",null,{"id":"comparator-的评分标准"}]]}]
+3c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"分维度评分不是随便分的。内容维度和结构维度各自回答一个核心问题："}]
+3d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"内容维度——“说的对不对？“"}]}]
+3e:["$","table",null,{"className":"x:block x:overflow-x-auto nextra-scrollbar x:not-first:mt-[1.25em] x:p-0","children":[["$","thead",null,{"children":["$","tr",null,{"children":[["$","th",null,{"children":"子项","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"评判标准","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"典型失分场景","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]}],["$","tbody",null,{"children":[["$","tr",null,{"children":[["$","td",null,{"children":"正确性","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"指出的问题是否真实存在，有没有无中生有","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"AI 把合理的代码标记为 bug","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"完整性","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"是否覆盖了所有应检查的点，有没有遗漏关键问题","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"安全漏洞没被发现","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"准确性","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"文件路径、行号、变量名是否准确","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"路径写错、行号偏移","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]]}]]}]
+3f:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"结构维度——“好不好用？“"}]}]
+40:["$","table",null,{"className":"x:block x:overflow-x-auto nextra-scrollbar x:not-first:mt-[1.25em] x:p-0","children":[["$","thead",null,{"children":["$","tr",null,{"children":[["$","th",null,{"children":"子项","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"评判标准","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"典型失分场景","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]}],["$","tbody",null,{"children":[["$","tr",null,{"children":[["$","td",null,{"children":"组织","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"问题是否分类清晰，有没有逻辑分组","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"所有问题堆在一起没有分类","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"格式","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"是否易于阅读和后续处理（复制、搜索）","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"纯文本墙，没有代码块标记","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"可操作性","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"看完能不能直接改代码，而不是还要去查文档","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"”建议优化性能”但不说怎么优化","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]]}]]}]
+41:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"为什么要分两个维度？因为改进 Skill 时经常出现此消彼长的情况。你改了 prompt 措辞让 AI 更精确地定位问题（内容维度提升），但输出变成了密密麻麻的技术术语堆砌（结构维度下降）。单一分数会掩盖这种退步，分维度评分能把它暴露出来。"}]
+42:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"comparator 对每个维度分别给出 A/B 的优劣判定和理由。最终汇总时，如果两个维度方向一致（A 在内容和结构上都更好），结论很清晰；如果方向相反，就需要人工权衡——这个 Skill 的使用场景更看重正确性还是可读性？"}]
+43:["$","h2",null,{"id":"模式分析analyzer","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["模式分析（Analyzer）",["$","$La",null,{"id":"模式分析analyzer"}]]}]
+44:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["grader 和 comparator 回答的是”这一轮 eval 结果怎么样”。但跑了三五轮之后，你需要回答一个更高层的问题：",["$","strong",null,{"children":"跨轮次看，有没有反复出现的模式？"}]]}]
+45:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这就是 analyzer 的工作。它是 skill-creator 的 agents/ 目录下第三个子代理，做的是事后的模式识别。"}]
+46:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"analyzer 的输入是多轮 eval 的汇总数据（summary.json）和 grader 报告。它要找的东西包括："}]
+47:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"顽固断言"}],"：连续三轮都失败的同一条断言。这说明当前的 SKILL.md 指令在某个方向上有结构性缺陷，小修小补解决不了，需要重新审视 Skill 的设计思路。"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"退步模式"}],"：第 N 轮通过了但第 N+1 轮又失败的断言。这说明你的修改引入了回归，得检查两轮之间改了什么。"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"弱断言集中区"}],"：grader 标记为”太弱”的断言如果集中在某一类测试用例上，说明你对这类场景的预期定义不够清晰。"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"维度偏科"}],"：如果内容维度持续提升但结构维度持续下降，说明你在迭代中只关注了”说对”而忽略了”说好”。"]}],"\n"]}]
+48:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"analyzer 的输出是一份诊断报告，指出最需要关注的 2-3 个模式，并给出改进方向的建议。注意它只给方向，不给具体的 SKILL.md 修改——具体怎么改是你的决策，analyzer 只负责把问题摆到台面上。"}]
+49:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这个角色在前两轮 eval 时用处不大（数据太少），但从第三轮开始价值会明显体现。如果你发现自己在第五轮还在跟同一个问题纠缠，大概率是因为没有跳出来看模式。"}]
+4a:["$","h2",null,{"id":"人工审查补位","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["人工审查补位",["$","$La",null,{"id":"人工审查补位"}]]}]
+4b:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"自动 eval 抓客观问题：断言通过没有、格式对不对、有没有遗漏的检查项。"}]
+4c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["但有一类问题自动 eval 抓不到：",["$","strong",null,{"children":"技术正确但没用"}],"。"]}]
+4d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["AI 审查一段代码，指出”这个函数的圈复杂度是 15”。从技术上说完全正确。但作为 review 意见，这句话毫无意义——开发者需要知道的是”这个函数需要拆分，建议把验证逻辑提取到 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"validateInput()"}]," 中”。"]}]
+4e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"人工审查就是补这个缺口。review 最近 5 次 eval 的输出，找那些”断言通过了但其实不够好”的地方。"}]
+4f:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"人工反馈的格式要具体、可操作："}]
+50:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lc",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"children":"eval: complex-pr"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"问题：AI 指出了 3 个正确的问题，但建议太笼统。"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"具体：\"建议添加错误处理\" → 应该说 \"在 fetchUser() 的 catch 块中，"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"建议将 error 上报到 Sentry 而不是只 console.log，参考 known-pitfalls.md 中的监控规范\"。"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"操作：在 SKILL.md 中加一条指令 —— \"给出修复建议时，指出具体的修改方式和引用的团队规范\"。"}]}]]}]]}]]}]
+51:["$","h2",null,{"id":"迭代改进循环","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["迭代改进循环",["$","$La",null,{"id":"迭代改进循环"}]]}]
+52:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"评测不是一次性的。改 Skill → 跑 eval → 看结果 → 再改 → 再跑。这个循环什么时候停？"}]
+53:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"信号源有三个："}]
+54:["$","ol",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-decimal x:ms-6","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"失败的断言"}],"：最直接。哪条断言没通过，去看 AI 的输出到底差在哪"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"人工反馈"}],"：断言通过了但人觉得不够好的地方"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"transcript"}],"：AI 的推理过程。有时候输出正确但推理路径错误——这次碰巧对了，下次不一定"]}],"\n"]}]
+55:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"把这三个信号喂给 LLM，让它生成改进建议："}]
+56:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lc",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"children":"以下是 code-review Skill 的当前 eval 结果："}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"- 失败断言：[列表]"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"- 人工反馈：[列表]"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"- transcript 中的异常推理：[列表]"}]}],"\n",["$","span",null,{"children":["$","span",null,{}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"请分析这些信号，给出具体的 SKILL.md 修改建议。"}]}]]}]]}]]}]
+57:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"LLM 给出的建议不一定全对，但它能帮你快速定位方向。改完之后在 iteration-N+1 重跑 eval。"}]
+58:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"停止条件："}]
+59:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"连续两轮人工反馈为空（没有新的改进点）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"pass_rate 连续两轮无显著提升（波动在 0.02 以内）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"delta 已经足够大（比如 with_skill 比 without_skill 高 0.30 以上）"}],"\n"]}]
+5a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"到了这个阶段，Skill 就进入维护期了。不需要持续迭代，只需要在业务变化时更新规则，然后跑一轮 eval 确认没退化。"}]
+5b:["$","h2",null,{"id":"实战为-code-review-编写完整-evalsjson","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["实战：为 code-review 编写完整 evals.json",["$","$La",null,{"id":"实战为-code-review-编写完整-evalsjson"}]]}]
+5c:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lc",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"["}]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  {"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"name\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"simple-function\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"description\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"审查一个简单的工具函数\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"prompt\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"review src/utils/formatCurrency.ts\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"workspace\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"test-simple-function\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"assertions\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": ["}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"      \"指出函数缺少对 NaN 输入的处理\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"      \"指出函数没有处理负数的显示格式\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"      \"不误报：函数命名符合 camelCase 规范\""}]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"    ]"}]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  },"}]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  {"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"name\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],"$L71","$L72"]}],"\n","$L73","\n","$L74","\n","$L75","\n","$L76","\n","$L77","\n","$L78","\n","$L79","\n","$L7a","\n","$L7b","\n","$L7c","\n","$L7d","\n","$L7e","\n","$L7f","\n","$L80","\n","$L81","\n","$L82","\n","$L83","\n","$L84","\n","$L85","\n","$L86","\n","$L87","\n","$L88","\n","$L89","\n","$L8a","\n","$L8b","\n","$L8c","\n","$L8d","\n","$L8e","\n","$L8f","\n","$L90","\n","$L91","\n","$L92","\n","$L93"]}]]}]]}]
+5d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"四个测试用例，覆盖四种典型场景：简单函数、复杂 PR、安全漏洞、React 组件。每个用例 3-4 条断言，总共 14 条。"}]
+5e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"注意第三条断言的写法——“不误报”也是一种断言。你不仅要测 AI 能找到问题，还要测它不会无中生有。一个把所有代码都标红的 linter 没有价值。"}]
+61:null
+62:["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":", "}]
+63:["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"\"passed\""}]
+64:["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}]
+65:["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"4"}]
+66:["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":", "}]
+67:["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"\"pass_rate\""}]
+68:["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}]
+69:["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"0.40"}]
+6a:["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" },"}]
+6b:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"delta\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"0.40"}]]}]
+6c:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  },"}]}]
+6d:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"  \"failed_assertions\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": ["}]]}]
+6e:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"    { "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"\"eval\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"complex-pr\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":", "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"\"assertion\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"指出未处理的 Promise rejection\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":", "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"\"reason\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"AI 提到了错误处理但未定位到具体行号\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" }"}]]}]
+6f:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  ]"}]}]
+70:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"}"}]}]
+71:["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"complex-pr\""}]
+72:["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]
+73:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"description\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"审查一个涉及多文件的 PR\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}]
+74:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"prompt\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"review 当前 PR 的所有变更\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}]
+75:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"workspace\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"test-complex-pr\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}]
+76:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"assertions\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": ["}]]}]
+77:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"      \"检查了所有变更文件，不遗漏\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}]
+78:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"      \"指出 src/api/userService.ts 中的未处理 Promise rejection\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}]
+79:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"      \"指出 src/hooks/useData.ts 中 useEffect 缺少依赖数组\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}]
+7a:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"      \"按文件分组输出，不是一整坨\""}]}]
+7b:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"    ]"}]}]
+7c:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  },"}]}]
+7d:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  {"}]}]
+7e:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"name\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"security-vuln\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}]
+7f:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"description\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"审查包含安全漏洞的代码\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}]
+80:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"prompt\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"review src/components/CommentBox.tsx\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}]
+81:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"workspace\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"test-security-vuln\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}]
+82:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"assertions\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": ["}]]}]
+83:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"      \"指出 dangerouslySetInnerHTML 的 XSS 风险\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}]
+84:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"      \"给出具体的修复方式（使用 DOMPurify）\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}]
+85:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"      \"说明风险场景（用户可以注入恶意脚本）\""}]}]
+86:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"    ]"}]}]
+87:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  },"}]}]
+88:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  {"}]}]
+89:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"name\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"react-component\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}]
+8a:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"description\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"审查一个 React 组件\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}]
+8b:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"prompt\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"review src/components/UserProfile.tsx\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}]
+8c:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"workspace\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"test-react-component\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}]
+8d:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"assertions\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": ["}]]}]
+8e:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"      \"指出组件中使用了 any 类型\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}]
+8f:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"      \"指出 useEffect 的清理函数缺失（存在内存泄漏风险）\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}]
+90:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"      \"给出的类型建议是具体的接口定义，不是泛泛的'请加类型'\""}]}]
+91:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"    ]"}]}]
+92:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  }"}]}]
+93:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"]"}]}]

@@ -16,6 +16,9 @@ export default {
   },
   // 每本书作为 doc 文件夹保留（保证 sidebar 正常渲染章节）
   // 视觉上"书名"这一层由 CSS 隐藏（见 globals.css 中 .nextra-sidebar 区块）
+  transformer: {
+    title: 'Transformer 工程实战',
+  },
   'llm-infra': {
     title: 'LLM Infra 工程实战',
   },
@@ -45,6 +48,7 @@ export default {
     type: 'menu',
     title: 'LLM Infra',
     items: {
+      transformer: { title: 'Transformer 工程实战', href: '/transformer' },
       'llm-infra': { title: 'LLM Infra 工程实战', href: '/llm-infra' },
     },
   },

@@ -1,0 +1,257 @@
+1:"$Sreact.fragment"
+2:I[55169,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"TOCProvider"]
+3:I[769,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"Sidebar"]
+4:I[47486,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ClientWrapper"]
+a:I[63894,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"HeadingAnchor"]
+41:I[97367,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"OutletBoundary"]
+42:"$Sreact.suspense"
+44:I[83987,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ToggleWordWrapButton"]
+45:I[40493,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"CopyToClipboard"]
+5:T20d8,# Description 的触发艺术
+
+## 一个不被触发的 Skill 等于不存在
+
+你写了一个 code-review Skill，测了几遍，审查意见精准、格式漂亮。推给团队，同事兴冲冲打开 Claude Code，说了一句：
+
+"帮我看看这个 PR"
+
+没触发。AI 给了一个通用的代码审查回复，完全没加载你的 Skill。
+
+同事又试了一句："这段代码写得怎么样？"
+
+还是没触发。
+
+为什么？因为你的 description 写的是 `"A code review tool for pull requests"`。用户说的是"看看"、"写得怎么样"，和你写的"code review"、"pull requests"对不上。
+
+这里有一个很多人没意识到的事实：**用户不会记住 slash command**。他们不会输入 `/code-review`，他们会用自己的话说需求。如果 description 不能让 AI 在这些自然表述下触发 Skill，你写的东西就是个摆设。
+
+Description 不是文档说明。它是触发机制。
+
+## 触发是怎么工作的
+
+理解触发机制才能写好 description。流程很简单：
+
+1. 所有 Skill 的 `description` 始终在 AI 的上下文中（Level 1 加载）
+2. AI 收到用户消息后，扫描所有 description，判断是否应该触发某个 Skill
+3. 触发后才加载完整的 SKILL.md 正文（Level 2）
+
+关键在第 1 步：description 是始终在场的。它和其他所有 Skill 的 description 一起，占用上下文的大约 1%（最少 8000 字符的预算）。AI 就是靠这些 description 来做"该不该用这个 Skill"的决策。
+
+所以 description 的写作目标很明确——**让 AI 在该触发时触发，在不该触发时别触发**。
+
+## 适度激进
+
+大部分人写 description 太保守。来看几个版本：
+
+```yaml
+# ❌ 太模糊
+description: "A code review tool"
+```
+
+AI 看到这个，心里想：什么时候算 code review？用户说"帮我看看代码"算吗？说"这个函数有没有 bug"算吗？不确定，那就不触发吧。
+
+```yaml
+# ❌ 只覆盖了一种场景
+description: "Code review skill for reviewing pull requests"
+```
+
+好一点，但只管 PR。用户说"看看这段代码"不涉及 PR，不触发。
+
+```yaml
+# ✅ 覆盖了各种真实表述
+description: "审查代码的质量、安全性和可维护性。当用户说 review、审查、检查代码、看看这个 PR、帮我 check 一下、这段代码有问题吗时使用。"
+```
+
+这个版本把用户可能的说法直接列了出来。AI 看到用户说"帮我 check 一下"，在 description 里找到了完全匹配的表述，触发概率大幅提升。
+
+**策略是宁可多触发几次再收窄，不要一开始就太窄。** 触发了但不该触发，你可以调整 description 收窄范围。从来不触发，你连问题在哪都不知道。
+
+但也有边界。这种就过头了：
+
+```yaml
+# ❌ 万能触发器
+description: "Use this for anything related to code quality, testing, debugging, refactoring, or development best practices"
+```
+
+这把代码相关的操作全包了。用户说"帮我写个测试"——触发了，但你的 Skill 是做审查的，不是写测试的。误触发多了，AI 的行为反而会变混乱。
+
+## 写作公式
+
+一个好的 description 遵循这个结构：
+
+```
+[做什么] + [什么时候用，列举具体的用户表述]
+```
+
+前半句说能力，后半句说触发场景。触发场景要用用户的自然语言写，不是技术术语。
+
+几个例子：
+
+```yaml
+# 部署 Skill
+description: "部署应用到生产环境或预发环境。当用户说发布、上线、deploy、推到 prod、部署一下时使用。"
+
+# 翻译 Skill
+description: "翻译文档或代码注释。当用户说翻译、translate、帮我翻成英文、把这段中文转成英文时使用。"
+
+# 数据库迁移 Skill
+description: "生成和执行数据库 migration。当用户说加个字段、改表结构、migrate、建个新表时使用。"
+```
+
+多语言团队要特别注意：如果你的团队中英文混用，description 里两种语言的说法都要覆盖。"帮我 review 一下"和"帮我审查一下"是同一个意图，但 AI 不一定能跨语言推断。
+
+## 触发评测法：20 条查询测试
+
+写完 description，怎么知道好不好？测。
+
+准备两组查询，各 10 条。
+
+**应该触发的 10 条**（用各种说法、各种场景）：
+
+```
+1. "帮我看看这个 PR"
+2. "review src/components/UserCard.tsx"
+3. "这段代码写得怎么样"
+4. "我刚写完一个 hook，你帮我检查下有没有问题"
+5. "check this function for potential bugs"
+6. "这个模块的代码质量怎么样"
+7. "帮我 review 一下最近的改动"
+8. "看看这段逻辑有没有安全问题"
+9. "这个实现有没有什么坑"
+10. "审查一下 utils 目录下的代码"
+```
+
+**不应该触发的 10 条**（容易误触发的近似场景）：
+
+```
+1. "帮我写一个组件"          ← 写代码，不是审查
+2. "这个函数怎么调用"        ← 使用说明，不是审查
+3. "重构一下这段代码"        ← 重构，不是审查
+4. "帮我加个单元测试"        ← 写测试，不是审查
+5. "这个 bug 怎么修"         ← 修 bug，不是审查
+6. "解释一下这段代码的逻辑"  ← 解释，不是审查
+7. "把这个函数的性能优化一下" ← 优化，不是审查
+8. "帮我写个 API 接口"       ← 开发，不是审查
+9. "生成这个 schema 的类型"  ← 生成代码，不是审查
+10. "debug 一下为什么报错了" ← 调试，不是审查
+```
+
+逐条测试，记录触发结果。应触发的没触发，说明 description 覆盖不够；不该触发的触发了，说明范围太宽。反复调整，直到两组都满意。
+
+这和第 4 章的 delta 思维一脉相承——你在衡量的是 description 的精准度。
+
+## 三种调用模式
+
+除了 description 的措辞，还有一层控制：Skill 的调用模式配置。
+
+| 配置 | 用户能调用 | AI 能自动触发 | 适用场景 |
+|------|-----------|-------------|---------|
+| 默认 | 是 | 是 | 大部分 Skill |
+| `disable-model-invocation: true` | 是 | 否 | 有副作用的操作（部署、发消息） |
+| `user-invocable: false` | 否 | 是 | 背景知识，用户不需要直接调用 |
+
+第二种特别重要。像部署、发送通知这种有副作用的 Skill，你不希望 AI 因为用户随口一句"发一下"就自动触发。设成 `disable-model-invocation: true`，用户必须显式地用 `/deploy` 来调用。
+
+第三种适合那些"AI 应该知道但用户不需要关心"的 Skill，比如团队编码规范、项目上下文信息。
+
+## 实战：从初版到优化版
+
+看一个完整的迭代过程。
+
+**初版**：
+
+```yaml
+description: "Review code for quality issues"
+```
+
+测试结果：20 条查询中，应触发 10 条只触发了 4 条，不该触发 10 条误触发 0 条。精准但太窄。
+
+**第二版**，扩大覆盖面：
+
+```yaml
+description: "审查代码的质量和安全性。当用户说 review、看看代码、检查代码、帮我 check 一下时使用。"
+```
+
+测试结果：应触发 10 条触发了 7 条，误触发 1 条（"重构一下这段代码"被触发了）。覆盖面上来了，但有一条误触发。
+
+**第三版**，微调边界：
+
+```yaml
+description: "审查代码的质量、安全性和可维护性，给出审查意见但不修改代码。当用户说 review、审查、检查代码、看看这个 PR、帮我 check 一下、这段代码有问题吗、代码质量怎么样时使用。不用于写代码、重构或修 bug。"
+```
+
+测试结果：应触发 10 条触发了 9 条，误触发 0 条。加了"不修改代码"和排除场景的说明后，AI 能更好地区分"审查"和"重构"。
+
+三轮迭代，每轮改几个词，效果从 40% 到 90%。
+
+## 反模式
+
+最后说一个常见的坑。
+
+有人图省事，把 description 写成大而全的触发器：
+
+```yaml
+description: "Use this skill whenever the user mentions anything about code quality, testing, debugging, refactoring, or development best practices"
+```
+
+看起来覆盖面很广，实际效果很差。因为太多不相关的查询都会触发它——用户问怎么写测试，触发了你的 code-review Skill；用户想 debug，也触发了。AI 加载了一堆审查指令去做调试的事，输出反而更差。
+
+**description 的目标是精准，不是广泛。** 宁可列 10 个具体的触发短语，也不要写一句模糊的万能描述。0:{"rsc":["$","$1","c",{"children":[["$","div",null,{"className":"x:mx-auto x:flex x:max-w-(--nextra-content-width)","children":["$","$L2",null,{"value":[{"value":"一个不被触发的 Skill 等于不存在","id":"一个不被触发的-skill-等于不存在","depth":2},{"value":"触发是怎么工作的","id":"触发是怎么工作的","depth":2},{"value":"适度激进","id":"适度激进","depth":2},{"value":"写作公式","id":"写作公式","depth":2},{"value":"触发评测法：20 条查询测试","id":"触发评测法20-条查询测试","depth":2},{"value":"三种调用模式","id":"三种调用模式","depth":2},{"value":"实战：从初版到优化版","id":"实战从初版到优化版","depth":2},{"value":"反模式","id":"反模式","depth":2}],"children":[["$","$L3",null,{}],["$","$L4",null,{"metadata":{"title":"Description 的触发艺术","filePath":"content/claude-skill/creation/description-trigger.md","timestamp":1778089813000},"sourceCode":"$5","children":["$L6","$L7"]}]]}]}],null,"$L8"]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"CR_c9URqh-5K47K_DC-c1"}
+6:["$","div",null,{"id":"nextra-skip-nav"}]
+9:T4c5,{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://inferloop.dev/claude-skill/creation/description-trigger#article","headline":"Description 的触发艺术","description":"你写了一个 code-review Skill，测了几遍，审查意见精准、格式漂亮。推给团队，同事兴冲冲打开 Claude Code，说了一句：","inLanguage":"zh-CN","author":{"@type":"Person","name":"递归客"},"publisher":{"@type":"Organization","name":"InferLoop","url":"https://inferloop.dev"},"isPartOf":{"@type":"Book","name":"Claude Code Skill 指南","url":"https://inferloop.dev/claude-skill","image":"https://images.redream.cn/images/k6Sky9.png"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://inferloop.dev/claude-skill/creation/description-trigger"},"image":"https://images.redream.cn/images/k6Sky9.png"},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"首页","item":"https://inferloop.dev"},{"@type":"ListItem","position":2,"name":"Claude Code Skill 指南","item":"https://inferloop.dev/claude-skill"},{"@type":"ListItem","position":3,"name":"Description 的触发艺术","item":"https://inferloop.dev/claude-skill/creation/description-trigger"}]}]}7:["$","main",null,{"data-pagefind-body":true,"children":[["$","script",null,{"type":"application/ld+json","dangerouslySetInnerHTML":{"__html":"$9"}}],[["$","h1",null,{"className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-bold x:mt-2 x:text-4xl","children":["Description 的触发艺术","$undefined"]}],"\n",["$","h2",null,{"id":"一个不被触发的-skill-等于不存在","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["一个不被触发的 Skill 等于不存在",["$","$La",null,{"id":"一个不被触发的-skill-等于不存在"}]]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"你写了一个 code-review Skill，测了几遍，审查意见精准、格式漂亮。推给团队，同事兴冲冲打开 Claude Code，说了一句："}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"“帮我看看这个 PR”"}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"没触发。AI 给了一个通用的代码审查回复，完全没加载你的 Skill。"}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"同事又试了一句：“这段代码写得怎么样？”"}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"还是没触发。"}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["为什么？因为你的 description 写的是 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"\"A code review tool for pull requests\""}],"。用户说的是”看看”、“写得怎么样”，和你写的”code review”、“pull requests”对不上。"]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["这里有一个很多人没意识到的事实：",["$","strong",null,{"children":"用户不会记住 slash command"}],"。他们不会输入 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"/code-review"}],"，他们会用自己的话说需求。如果 description 不能让 AI 在这些自然表述下触发 Skill，你写的东西就是个摆设。"]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Description 不是文档说明。它是触发机制。"}],"\n",["$","h2",null,{"id":"触发是怎么工作的","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["触发是怎么工作的",["$","$La",null,{"id":"触发是怎么工作的"}]]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"理解触发机制才能写好 description。流程很简单："}],"\n",["$","ol",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-decimal x:ms-6","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":["所有 Skill 的 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"description"}]," 始终在 AI 的上下文中（Level 1 加载）"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"AI 收到用户消息后，扫描所有 description，判断是否应该触发某个 Skill"}],"\n","$Lb","\n"]}],"\n","$Lc","\n","$Ld","\n","$Le","\n","$Lf","\n","$L10","\n","$L11","\n","$L12","\n","$L13","\n","$L14","\n","$L15","\n","$L16","\n","$L17","\n","$L18","\n","$L19","\n","$L1a","\n","$L1b","\n","$L1c","\n","$L1d","\n","$L1e","\n","$L1f","\n","$L20","\n","$L21","\n","$L22","\n","$L23","\n","$L24","\n","$L25","\n","$L26","\n","$L27","\n","$L28","\n","$L29","\n","$L2a","\n","$L2b","\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n","$L2c","\n","$L2d","\n","$L2e","\n","$L2f","\n","$L30","\n","$L31","\n","$L32","\n","$L33","\n","$L34","\n","$L35","\n","$L36","\n","$L37","\n","$L38","\n","$L39","\n","$L3a","\n","$L3b","\n","$L3c","\n","$L3d","\n","$L3e","\n","$L3f","\n","$L40"]]}]
+8:["$","$L41",null,{"children":["$","$42",null,{"name":"Next.MetadataOutlet","children":"$@43"}]}]
+b:["$","li",null,{"className":"x:my-[.5em]","children":"触发后才加载完整的 SKILL.md 正文（Level 2）"}]
+c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"关键在第 1 步：description 是始终在场的。它和其他所有 Skill 的 description 一起，占用上下文的大约 1%（最少 8000 字符的预算）。AI 就是靠这些 description 来做”该不该用这个 Skill”的决策。"}]
+d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["所以 description 的写作目标很明确——",["$","strong",null,{"children":"让 AI 在该触发时触发，在不该触发时别触发"}],"。"]}]
+e:["$","h2",null,{"id":"适度激进","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["适度激进",["$","$La",null,{"id":"适度激进"}]]}]
+f:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"大部分人写 description 太保守。来看几个版本："}]
+10:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L44",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L45",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# ❌ 太模糊"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"description"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"A code review tool\""}]]}]]}]]}]]}]
+11:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"AI 看到这个，心里想：什么时候算 code review？用户说”帮我看看代码”算吗？说”这个函数有没有 bug”算吗？不确定，那就不触发吧。"}]
+12:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L44",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L45",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# ❌ 只覆盖了一种场景"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"description"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"Code review skill for reviewing pull requests\""}]]}]]}]]}]]}]
+13:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"好一点，但只管 PR。用户说”看看这段代码”不涉及 PR，不触发。"}]
+14:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L44",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L45",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# ✅ 覆盖了各种真实表述"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"description"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"审查代码的质量、安全性和可维护性。当用户说 review、审查、检查代码、看看这个 PR、帮我 check 一下、这段代码有问题吗时使用。\""}]]}]]}]]}]]}]
+15:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这个版本把用户可能的说法直接列了出来。AI 看到用户说”帮我 check 一下”，在 description 里找到了完全匹配的表述，触发概率大幅提升。"}]
+16:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"策略是宁可多触发几次再收窄，不要一开始就太窄。"}]," 触发了但不该触发，你可以调整 description 收窄范围。从来不触发，你连问题在哪都不知道。"]}]
+17:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"但也有边界。这种就过头了："}]
+18:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L44",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L45",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# ❌ 万能触发器"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"description"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"Use this for anything related to code quality, testing, debugging, refactoring, or development best practices\""}]]}]]}]]}]]}]
+19:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这把代码相关的操作全包了。用户说”帮我写个测试”——触发了，但你的 Skill 是做审查的，不是写测试的。误触发多了，AI 的行为反而会变混乱。"}]
+1a:["$","h2",null,{"id":"写作公式","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["写作公式",["$","$La",null,{"id":"写作公式"}]]}]
+1b:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"一个好的 description 遵循这个结构："}]
+1c:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L44",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L45",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":["$","span",null,{"children":"[做什么] + [什么时候用，列举具体的用户表述]"}]}]}]]}]]}]
+1d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"前半句说能力，后半句说触发场景。触发场景要用用户的自然语言写，不是技术术语。"}]
+1e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"几个例子："}]
+1f:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L44",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L45",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# 部署 Skill"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"description"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"部署应用到生产环境或预发环境。当用户说发布、上线、deploy、推到 prod、部署一下时使用。\""}]]}],"\n",["$","span",null,{"children":" "}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# 翻译 Skill"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"description"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"翻译文档或代码注释。当用户说翻译、translate、帮我翻成英文、把这段中文转成英文时使用。\""}]]}],"\n",["$","span",null,{"children":" "}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# 数据库迁移 Skill"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"description"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"生成和执行数据库 migration。当用户说加个字段、改表结构、migrate、建个新表时使用。\""}]]}]]}]]}]]}]
+20:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"多语言团队要特别注意：如果你的团队中英文混用，description 里两种语言的说法都要覆盖。“帮我 review 一下”和”帮我审查一下”是同一个意图，但 AI 不一定能跨语言推断。"}]
+21:["$","h2",null,{"id":"触发评测法20-条查询测试","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["触发评测法：20 条查询测试",["$","$La",null,{"id":"触发评测法20-条查询测试"}]]}]
+22:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"写完 description，怎么知道好不好？测。"}]
+23:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"准备两组查询，各 10 条。"}]
+24:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"应该触发的 10 条"}],"（用各种说法、各种场景）："]}]
+25:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L44",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L45",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"children":"1. \"帮我看看这个 PR\""}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"2. \"review src/components/UserCard.tsx\""}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"3. \"这段代码写得怎么样\""}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"4. \"我刚写完一个 hook，你帮我检查下有没有问题\""}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"5. \"check this function for potential bugs\""}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"6. \"这个模块的代码质量怎么样\""}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"7. \"帮我 review 一下最近的改动\""}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"8. \"看看这段逻辑有没有安全问题\""}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"9. \"这个实现有没有什么坑\""}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"10. \"审查一下 utils 目录下的代码\""}]}]]}]]}]]}]
+26:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"不应该触发的 10 条"}],"（容易误触发的近似场景）："]}]
+27:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L44",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L45",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"children":"1. \"帮我写一个组件\"          ← 写代码，不是审查"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"2. \"这个函数怎么调用\"        ← 使用说明，不是审查"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"3. \"重构一下这段代码\"        ← 重构，不是审查"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"4. \"帮我加个单元测试\"        ← 写测试，不是审查"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"5. \"这个 bug 怎么修\"         ← 修 bug，不是审查"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"6. \"解释一下这段代码的逻辑\"  ← 解释，不是审查"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"7. \"把这个函数的性能优化一下\" ← 优化，不是审查"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"8. \"帮我写个 API 接口\"       ← 开发，不是审查"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"9. \"生成这个 schema 的类型\"  ← 生成代码，不是审查"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"10. \"debug 一下为什么报错了\" ← 调试，不是审查"}]}]]}]]}]]}]
+28:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"逐条测试，记录触发结果。应触发的没触发，说明 description 覆盖不够；不该触发的触发了，说明范围太宽。反复调整，直到两组都满意。"}]
+29:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这和第 4 章的 delta 思维一脉相承——你在衡量的是 description 的精准度。"}]
+2a:["$","h2",null,{"id":"三种调用模式","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["三种调用模式",["$","$La",null,{"id":"三种调用模式"}]]}]
+2b:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"除了 description 的措辞，还有一层控制：Skill 的调用模式配置。"}]
+2c:["$","table",null,{"className":"x:block x:overflow-x-auto nextra-scrollbar x:not-first:mt-[1.25em] x:p-0","children":[["$","thead",null,{"children":["$","tr",null,{"children":[["$","th",null,{"children":"配置","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"用户能调用","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"AI 能自动触发","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"适用场景","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]}],["$","tbody",null,{"children":[["$","tr",null,{"children":[["$","td",null,{"children":"默认","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"是","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"是","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"大部分 Skill","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":["$","code",null,{"className":"nextra-code","dir":"ltr","children":"disable-model-invocation: true"}],"className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"是","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"否","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"有副作用的操作（部署、发消息）","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":["$","code",null,{"className":"nextra-code","dir":"ltr","children":"user-invocable: false"}],"className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"否","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"是","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"背景知识，用户不需要直接调用","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]]}]]}]
+2d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["第二种特别重要。像部署、发送通知这种有副作用的 Skill，你不希望 AI 因为用户随口一句”发一下”就自动触发。设成 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"disable-model-invocation: true"}],"，用户必须显式地用 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"/deploy"}]," 来调用。"]}]
+2e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"第三种适合那些”AI 应该知道但用户不需要关心”的 Skill，比如团队编码规范、项目上下文信息。"}]
+2f:["$","h2",null,{"id":"实战从初版到优化版","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["实战：从初版到优化版",["$","$La",null,{"id":"实战从初版到优化版"}]]}]
+30:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"看一个完整的迭代过程。"}]
+31:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"初版"}],"："]}]
+32:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L44",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L45",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"description"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"Review code for quality issues\""}]]}]}]]}]]}]
+33:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"测试结果：20 条查询中，应触发 10 条只触发了 4 条，不该触发 10 条误触发 0 条。精准但太窄。"}]
+34:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"第二版"}],"，扩大覆盖面："]}]
+35:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L44",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L45",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"description"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"审查代码的质量和安全性。当用户说 review、看看代码、检查代码、帮我 check 一下时使用。\""}]]}]}]]}]]}]
+36:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"测试结果：应触发 10 条触发了 7 条，误触发 1 条（“重构一下这段代码”被触发了）。覆盖面上来了，但有一条误触发。"}]
+37:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"第三版"}],"，微调边界："]}]
+38:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L44",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L45",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"description"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"审查代码的质量、安全性和可维护性，给出审查意见但不修改代码。当用户说 review、审查、检查代码、看看这个 PR、帮我 check 一下、这段代码有问题吗、代码质量怎么样时使用。不用于写代码、重构或修 bug。\""}]]}]}]]}]]}]
+39:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"测试结果：应触发 10 条触发了 9 条，误触发 0 条。加了”不修改代码”和排除场景的说明后，AI 能更好地区分”审查”和”重构”。"}]
+3a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"三轮迭代，每轮改几个词，效果从 40% 到 90%。"}]
+3b:["$","h2",null,{"id":"反模式","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["反模式",["$","$La",null,{"id":"反模式"}]]}]
+3c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"最后说一个常见的坑。"}]
+3d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"有人图省事，把 description 写成大而全的触发器："}]
+3e:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L44",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L45",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"description"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"Use this skill whenever the user mentions anything about code quality, testing, debugging, refactoring, or development best practices\""}]]}]}]]}]]}]
+3f:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"看起来覆盖面很广，实际效果很差。因为太多不相关的查询都会触发它——用户问怎么写测试，触发了你的 code-review Skill；用户想 debug，也触发了。AI 加载了一堆审查指令去做调试的事，输出反而更差。"}]
+40:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"description 的目标是精准，不是广泛。"}]," 宁可列 10 个具体的触发短语，也不要写一句模糊的万能描述。"]}]
+43:null

@@ -1,0 +1,501 @@
+1:"$Sreact.fragment"
+2:I[55169,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"TOCProvider"]
+3:I[769,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"Sidebar"]
+4:I[47486,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ClientWrapper"]
+a:I[63894,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"HeadingAnchor"]
+b:I[83987,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ToggleWordWrapButton"]
+c:I[40493,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"CopyToClipboard"]
+bd:I[97367,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"OutletBoundary"]
+be:"$Sreact.suspense"
+5:T2949,# 自动化评测流水线
+
+## CI 集成：PR 修改 Skill 时自动跑 eval
+
+手动跑 eval 能解决问题，但靠不住。忙起来就忘了，或者"改了个措辞应该没事吧"然后直接合并。
+
+和代码测试一样——自动化才是唯一可靠的方案。
+
+### GitHub Actions 配置
+
+```yaml
+# .github/workflows/skill-eval.yml
+name: Skill Evaluation
+
+on:
+  pull_request:
+    paths:
+      - '.claude/skills/**'
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 需要完整历史来对比 baseline
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Detect changed skills
+        id: changed
+        run: |
+          SKILLS=$(git diff --name-only origin/main...HEAD \
+            | grep '^\.claude/skills/' \
+            | cut -d'/' -f3 \
+            | sort -u)
+          echo "skills=$SKILLS" >> "$GITHUB_OUTPUT"
+          echo "Changed skills: $SKILLS"
+
+      - name: Run evals for changed skills
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          for SKILL in ${{ steps.changed.outputs.skills }}; do
+            SKILL_DIR=".claude/skills/$SKILL"
+            EVAL_FILE="$SKILL_DIR/evals.json"
+
+            if [ ! -f "$EVAL_FILE" ]; then
+              echo "::warning::No evals.json found for $SKILL"
+              continue
+            fi
+
+            echo "Running eval for $SKILL..."
+
+            # 注意：以下命令是概念演示。目前没有官方的 skill-eval CLI 工具。
+            # 实际实现有两种方式：
+            # 1. 用 skill-creator 的 scripts/run_eval.py（需要 Python 环境）
+            # 2. 自己写一个简单的评测脚本，核心逻辑是：
+            #    - 启动两个 Claude Code 会话（一个加载 Skill，一个不加载）
+            #    - 把 evals.json 中的 prompt 分别发给两个会话
+            #    - 收集输出，对比断言通过率
+
+            # 用 skill-creator 的方式（如果已安装）：
+            # python -m scripts.run_eval --skill "$SKILL_DIR" --evals "$EVAL_FILE"
+            #
+            # 或者用自定义脚本（见 examples/ch21-ci-pipeline/eval-runner.ts）：
+            npx tsx .claude/scripts/eval-runner.ts \
+              --skill "$SKILL_DIR" \
+              --evals "$EVAL_FILE" \
+              --output "eval-results/$SKILL/summary.json"
+          done
+
+      - name: Compare with baseline
+        id: compare
+        run: |
+          REPORT=""
+          EXIT_CODE=0
+
+          for SKILL in ${{ steps.changed.outputs.skills }}; do
+            SUMMARY="eval-results/$SKILL/summary.json"
+            BASELINE=".claude/skills/$SKILL/benchmark.json"
+
+            if [ ! -f "$SUMMARY" ]; then
+              continue
+            fi
+
+            NEW_RATE=$(jq -r '.results.with_skill.pass_rate' "$SUMMARY")
+            DELTA=$(jq -r '.results.delta' "$SUMMARY")
+
+            if [ -f "$BASELINE" ]; then
+              OLD_RATE=$(jq -r '.pass_rate' "$BASELINE")
+              DIFF=$(echo "$NEW_RATE - $OLD_RATE" | bc)
+
+              if (( $(echo "$DIFF < -0.05" | bc -l) )); then
+                REPORT="$REPORT\n❌ **$SKILL**: pass_rate $OLD_RATE → $NEW_RATE (退化 $DIFF)"
+                EXIT_CODE=1
+              else
+                REPORT="$REPORT\n✅ **$SKILL**: pass_rate $OLD_RATE → $NEW_RATE (delta: $DELTA)"
+              fi
+            else
+              REPORT="$REPORT\n⚠️ **$SKILL**: pass_rate $NEW_RATE (无 baseline，首次评测)"
+            fi
+          done
+
+          echo "report<<EOF" >> "$GITHUB_OUTPUT"
+          echo -e "$REPORT" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+          exit $EXIT_CODE
+
+      - name: Comment on PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const report = `${{ steps.compare.outputs.report }}`;
+            const body = `## Skill Eval Results\n\n${report}\n\n` +
+              `_Auto-generated by skill-eval workflow_`;
+
+            // 查找已有评论并更新，避免重复评论
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.data.find(c =>
+              c.body.includes('Skill Eval Results'));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+```
+
+这个 workflow 做四件事：
+
+1. 检测哪些 Skill 被改了
+2. 对每个改了的 Skill 跑 eval（with_skill + without_skill）
+3. 和 baseline 对比，检查有没有退化
+4. 把结果评论到 PR 上
+
+触发条件是 `.claude/skills/**` 路径有变更。你改业务代码不会触发这个 workflow，只有动了 Skill 才跑。
+
+### 退化阈值
+
+配置里的关键数字是 `-0.05`。pass_rate 下降超过 5% 就判定为退化，CI 报错。
+
+为什么是 5% 而不是 0？因为 LLM 的输出有随机性。同一个 Skill、同一个 prompt，跑两次的结果不完全一样。允许 5% 的波动是务实的。
+
+如果你的测试用例够多（10 条以上断言），可以把阈值收紧到 3%。用例太少的话，单条断言的随机波动就会导致 pass_rate 剧烈变化。
+
+## 基线管理
+
+基线是评测的锚点。没有基线，你只知道"这次 pass_rate 是 0.85"，不知道这是进步还是退步。
+
+### benchmark.json 版本化提交
+
+每个 Skill 目录下放一个 `benchmark.json`：
+
+```json
+{
+  "version": "2025-04-01",
+  "skill_commit": "abc1234",
+  "pass_rate": 0.85,
+  "delta": 0.40,
+  "total_assertions": 14,
+  "passed_assertions": 12,
+  "eval_details": [
+    { "name": "simple-function", "pass_rate": 1.0 },
+    { "name": "complex-pr", "pass_rate": 0.75 },
+    { "name": "security-vuln", "pass_rate": 1.0 },
+    { "name": "react-component", "pass_rate": 0.67 }
+  ]
+}
+```
+
+这个文件提交到 git，和 Skill 一起版本管理。CI 跑 eval 时就拿它做对比。
+
+### 基线更新流程
+
+不是每次 eval 跑完都更新基线。更新基线意味着"我认可当前的表现水平"。
+
+流程：
+
+1. 跑 eval，确认 pass_rate 有提升
+2. 人工 review eval 结果，确认提升是真实的（不是因为断言变弱了）
+3. 更新 benchmark.json
+4. 在 commit message 中说明为什么更新基线
+
+```bash
+git add .claude/skills/code-review/benchmark.json
+git commit -m "chore(skill): update code-review baseline to 0.88
+
+Added performance check rules, eval pass_rate improved from 0.85 to 0.88.
+Reviewed eval outputs manually, improvement is genuine."
+```
+
+反模式：CI 自动更新基线。这等于取消了基线的意义——永远和上一次比，永远不退化，但也永远不知道绝对水平在哪。
+
+## eval-viewer 可视化
+
+eval 的原始数据是 JSON，不够直观。用 `generate_review.py` 生成交互式 HTML，可以直观地对比两次 eval 的结果。
+
+生成方式：
+
+```bash
+python scripts/generate_review.py \
+  --input eval-results/code-review/ \
+  --output eval-results/code-review/review.html
+```
+
+生成的 HTML 包含：
+
+- **输出对比视图**：左右分栏，with_skill 和 without_skill 的输出并排显示，差异高亮
+- **断言通过率**：每个 eval 用例的通过率，用颜色编码（绿/黄/红）
+- **评分详情**：每条断言的判定结果和理由
+- **趋势图**：多个 iteration 的 pass_rate 变化曲线
+
+这个 HTML 可以作为 CI 的 artifact 上传，reviewer 在 PR 页面直接下载查看。
+
+在 GitHub Actions 中添加 artifact 上传：
+
+```yaml
+      - name: Upload eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: eval-results/
+          retention-days: 30
+```
+
+## 团队评测流程
+
+把前面的所有环节串起来，完整流程如下：
+
+```
+ 改 Skill
+   │
+   ▼
+ 本地跑 eval
+   │
+   ├─ pass_rate 退化 → 回去改 Skill
+   │
+   ▼
+ 提 PR
+   │
+   ▼
+ CI 自动跑 eval ──→ 评论 PR（pass_rate 对比）
+   │
+   ├─ CI 失败 → 回去改 Skill
+   │
+   ▼
+ Owner review
+   │
+   ├─ 看 eval report（下载 artifact）
+   ├─ 看 Skill 变更的合理性
+   ├─ 对照 checklist（第 19 章）
+   │
+   ▼
+ 合并到 main
+   │
+   ▼
+ 更新 baseline（如果 pass_rate 提升了）
+   │
+   ▼
+ 全团队生效
+```
+
+几个注意点：
+
+**本地 eval 是可选但强烈推荐的。** CI 跑一次 eval 可能需要几分钟（取决于测试用例数量和 API 延迟）。如果你改了 Skill 就直接提 PR 等 CI 告诉你结果，来回几次就浪费半天。在本地先跑一遍，确认没问题再提 PR。
+
+**CI eval 是强制的。** 本地 eval 可能因为环境差异（不同的模型版本、不同的上下文状态）得到不同结果。CI 跑的 eval 是标准化的，所有人用同一个环境、同一个模型配置。
+
+**Owner review 不只是看 eval 数据。** eval 通过只说明客观指标没退化。Owner 还需要判断：这个变更有没有必要？会不会让 Skill 膨胀（第 17 章）？新规则的措辞够不够精确（第 7 章）？
+
+**基线更新是显式操作。** 合并 PR 之后，如果 pass_rate 提升了，Owner 手动更新 benchmark.json 并提交。这个操作本身就是一个 commit，有记录可查。
+
+## 最后一点
+
+评测流水线的成本不低——每次 CI 要调 API、要等结果、要上传 artifact。但这是值得付的成本。
+
+没有自动化评测的 Skill，就像没有自动化测试的代码。刚开始写的时候觉得"我心里有数"，三个月后就是一坨不敢动的东西。
+
+你团队的第一个 CI eval 不需要很完善。从最关键的那一两个 Skill 开始，跑起来再逐步完善。等团队尝到甜头——某次 PR 的 CI 评论提示"pass_rate 退化了 0.12"，reviewer 一看，果然是新规则和旧规则冲突了——以后就没人会质疑"这玩意有必要吗"。0:{"rsc":["$","$1","c",{"children":[["$","div",null,{"className":"x:mx-auto x:flex x:max-w-(--nextra-content-width)","children":["$","$L2",null,{"value":[{"value":"CI 集成：PR 修改 Skill 时自动跑 eval","id":"ci-集成pr-修改-skill-时自动跑-eval","depth":2},{"value":"GitHub Actions 配置","id":"github-actions-配置","depth":3},{"value":"退化阈值","id":"退化阈值","depth":3},{"value":"基线管理","id":"基线管理","depth":2},{"value":"benchmark.json 版本化提交","id":"benchmarkjson-版本化提交","depth":3},{"value":"基线更新流程","id":"基线更新流程","depth":3},{"value":"eval-viewer 可视化","id":"eval-viewer-可视化","depth":2},{"value":"团队评测流程","id":"团队评测流程","depth":2},{"value":"最后一点","id":"最后一点","depth":2}],"children":[["$","$L3",null,{}],["$","$L4",null,{"metadata":{"title":"自动化评测流水线","filePath":"content/claude-skill/evaluation/ci-eval-pipeline.md","timestamp":1778089813000},"sourceCode":"$5","children":["$L6","$L7"]}]]}]}],null,"$L8"]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"CR_c9URqh-5K47K_DC-c1"}
+6:["$","div",null,{"id":"nextra-skip-nav"}]
+9:T4a5,{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://inferloop.dev/claude-skill/evaluation/ci-eval-pipeline#article","headline":"自动化评测流水线","description":"手动跑 eval 能解决问题，但靠不住。忙起来就忘了，或者\"改了个措辞应该没事吧\"然后直接合并。","inLanguage":"zh-CN","author":{"@type":"Person","name":"递归客"},"publisher":{"@type":"Organization","name":"InferLoop","url":"https://inferloop.dev"},"isPartOf":{"@type":"Book","name":"Claude Code Skill 指南","url":"https://inferloop.dev/claude-skill","image":"https://images.redream.cn/images/k6Sky9.png"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://inferloop.dev/claude-skill/evaluation/ci-eval-pipeline"},"image":"https://images.redream.cn/images/k6Sky9.png"},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"首页","item":"https://inferloop.dev"},{"@type":"ListItem","position":2,"name":"Claude Code Skill 指南","item":"https://inferloop.dev/claude-skill"},{"@type":"ListItem","position":3,"name":"自动化评测流水线","item":"https://inferloop.dev/claude-skill/evaluation/ci-eval-pipeline"}]}]}7:["$","main",null,{"data-pagefind-body":true,"children":[["$","script",null,{"type":"application/ld+json","dangerouslySetInnerHTML":{"__html":"$9"}}],[["$","h1",null,{"className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-bold x:mt-2 x:text-4xl","children":["自动化评测流水线","$undefined"]}],"\n",["$","h2",null,{"id":"ci-集成pr-修改-skill-时自动跑-eval","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["CI 集成：PR 修改 Skill 时自动跑 eval",["$","$La",null,{"id":"ci-集成pr-修改-skill-时自动跑-eval"}]]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"手动跑 eval 能解决问题，但靠不住。忙起来就忘了，或者”改了个措辞应该没事吧”然后直接合并。"}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"和代码测试一样——自动化才是唯一可靠的方案。"}],"\n",["$","h3",null,{"id":"github-actions-配置","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["GitHub Actions 配置",["$","$La",null,{"id":"github-actions-配置"}]]}],"\n",["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lc",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# .github/workflows/skill-eval.yml"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"name"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"Skill Evaluation"}]]}],"\n",["$","span",null,{"children":" "}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"on"}],"$Ld"]}],"\n","$Le","\n","$Lf","\n","$L10","\n","$L11","\n","$L12","\n","$L13","\n","$L14","\n","$L15","\n","$L16","\n","$L17","\n","$L18","\n","$L19","\n","$L1a","\n","$L1b","\n","$L1c","\n","$L1d","\n","$L1e","\n","$L1f","\n","$L20","\n","$L21","\n","$L22","\n","$L23","\n","$L24","\n","$L25","\n","$L26","\n","$L27","\n","$L28","\n","$L29","\n","$L2a","\n","$L2b","\n","$L2c","\n","$L2d","\n","$L2e","\n","$L2f","\n","$L30","\n","$L31","\n","$L32","\n","$L33","\n","$L34","\n","$L35","\n","$L36","\n","$L37","\n","$L38","\n","$L39","\n","$L3a","\n","$L3b","\n","$L3c","\n","$L3d","\n","$L3e","\n","$L3f","\n","$L40","\n","$L41","\n","$L42","\n","$L43","\n","$L44","\n","$L45","\n","$L46","\n","$L47","\n","$L48","\n","$L49","\n","$L4a","\n","$L4b","\n","$L4c","\n","$L4d","\n","$L4e","\n","$L4f","\n","$L50","\n","$L51","\n","$L52","\n","$L53","\n","$L54","\n","$L55","\n","$L56","\n","$L57","\n","$L58","\n","$L59","\n","$L5a","\n","$L5b","\n","$L5c","\n","$L5d","\n","$L5e","\n","$L5f","\n","$L60","\n","$L61","\n","$L62","\n","$L63","\n","$L64","\n","$L65","\n","$L66","\n","$L67","\n","$L68","\n","$L69","\n","$L6a","\n","$L6b","\n","$L6c","\n","$L6d","\n","$L6e","\n","$L6f","\n","$L70","\n","$L71","\n","$L72","\n","$L73","\n","$L74","\n","$L75","\n","$L76","\n","$L77","\n","$L78","\n","$L79","\n","$L7a","\n","$L7b","\n","$L7c","\n","$L7d","\n","$L7e","\n","$L7f","\n","$L80","\n","$L81","\n","$L82","\n","$L83","\n","$L84","\n","$L85","\n","$L86","\n","$L87","\n","$L88","\n","$L89","\n","$L8a","\n","$L8b","\n","$L8c","\n","$L8d","\n","$L8e","\n","$L8f","\n","$L90","\n","$L91","\n","$L92","\n","$L93","\n","$L94"]}]]}]]}],"\n","$L95","\n","$L96","\n","$L97","\n","$L98","\n","$L99","\n","$L9a","\n","$L9b","\n","$L9c","\n","$L9d","\n","$L9e","\n","$L9f","\n","$La0","\n","$La1","\n","$La2","\n","$La3","\n","$La4","\n","$La5","\n","$La6","\n","$La7","\n","$La8","\n","$La9","\n","$Laa","\n","$Lab","\n","$Lac","\n","$Lad","\n","$Lae","\n","$Laf","\n","$Lb0","\n","$Lb1","\n","$Lb2","\n","$Lb3","\n","$Lb4","\n","$Lb5","\n","$Lb6","\n","$Lb7","\n","$Lb8","\n","$Lb9","\n","$Lba","\n","$Lbb","\n","$Lbc"]]}]
+8:["$","$Lbd",null,{"children":["$","$be",null,{"name":"Next.MetadataOutlet","children":"$@bf"}]}]
+d:["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":":"}]
+e:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"  pull_request"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":":"}]]}]
+f:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"    paths"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":":"}]]}]
+10:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"      - "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"'.claude/skills/**'"}]]}]
+11:["$","span",null,{"children":" "}]
+12:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"jobs"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":":"}]]}]
+13:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"  eval"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":":"}]]}]
+14:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"    runs-on"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"ubuntu-latest"}]]}]
+15:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"    timeout-minutes"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"30"}]]}]
+16:["$","span",null,{"children":" "}]
+17:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"    steps"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":":"}]]}]
+18:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"      - "}],["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"name"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"Checkout"}]]}]
+19:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"        uses"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"actions/checkout@v4"}]]}]
+1a:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"        with"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":":"}]]}]
+1b:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"          fetch-depth"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"0"}],["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"  # 需要完整历史来对比 baseline"}]]}]
+1c:["$","span",null,{"children":" "}]
+1d:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"      - "}],["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"name"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"Setup Node.js"}]]}]
+1e:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"        uses"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"actions/setup-node@v4"}]]}]
+1f:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"        with"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":":"}]]}]
+20:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"          node-version"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"'20'"}]]}]
+21:["$","span",null,{"children":" "}]
+22:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"      - "}],["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"name"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"Detect changed skills"}]]}]
+23:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"        id"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"changed"}]]}]
+24:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"        run"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"|"}]]}]
+25:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"          SKILLS=$(git diff --name-only origin/main...HEAD \\"}]}]
+26:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            | grep '^\\.claude/skills/' \\"}]}]
+27:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            | cut -d'/' -f3 \\"}]}]
+28:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            | sort -u)"}]}]
+29:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"          echo \"skills=$SKILLS\" >> \"$GITHUB_OUTPUT\""}]}]
+2a:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"          echo \"Changed skills: $SKILLS\""}]}]
+2b:["$","span",null,{"children":" "}]
+2c:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"      - "}],["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"name"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"Run evals for changed skills"}]]}]
+2d:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"        env"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":":"}]]}]
+2e:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"          ANTHROPIC_API_KEY"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"$${{ secrets.ANTHROPIC_API_KEY }}"}]]}]
+2f:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"        run"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"|"}]]}]
+30:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"          for SKILL in ${{ steps.changed.outputs.skills }}; do"}]}]
+31:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            SKILL_DIR=\".claude/skills/$SKILL\""}]}]
+32:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            EVAL_FILE=\"$SKILL_DIR/evals.json\""}]}]
+33:["$","span",null,{"children":" "}]
+34:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            if [ ! -f \"$EVAL_FILE\" ]; then"}]}]
+35:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"              echo \"::warning::No evals.json found for $SKILL\""}]}]
+36:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"              continue"}]}]
+37:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            fi"}]}]
+38:["$","span",null,{"children":" "}]
+39:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            echo \"Running eval for $SKILL...\""}]}]
+3a:["$","span",null,{"children":" "}]
+3b:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            # 注意：以下命令是概念演示。目前没有官方的 skill-eval CLI 工具。"}]}]
+3c:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            # 实际实现有两种方式："}]}]
+3d:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            # 1. 用 skill-creator 的 scripts/run_eval.py（需要 Python 环境）"}]}]
+3e:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            # 2. 自己写一个简单的评测脚本，核心逻辑是："}]}]
+3f:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            #    - 启动两个 Claude Code 会话（一个加载 Skill，一个不加载）"}]}]
+40:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            #    - 把 evals.json 中的 prompt 分别发给两个会话"}]}]
+41:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            #    - 收集输出，对比断言通过率"}]}]
+42:["$","span",null,{"children":" "}]
+43:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            # 用 skill-creator 的方式（如果已安装）："}]}]
+44:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            # python -m scripts.run_eval --skill \"$SKILL_DIR\" --evals \"$EVAL_FILE\""}]}]
+45:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            #"}]}]
+46:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            # 或者用自定义脚本（见 examples/ch21-ci-pipeline/eval-runner.ts）："}]}]
+47:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            npx tsx .claude/scripts/eval-runner.ts \\"}]}]
+48:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"              --skill \"$SKILL_DIR\" \\"}]}]
+49:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"              --evals \"$EVAL_FILE\" \\"}]}]
+4a:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"              --output \"eval-results/$SKILL/summary.json\""}]}]
+4b:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"          done"}]}]
+4c:["$","span",null,{"children":" "}]
+4d:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"      - "}],["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"name"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"Compare with baseline"}]]}]
+4e:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"        id"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"compare"}]]}]
+4f:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"        run"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"|"}]]}]
+50:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"          REPORT=\"\""}]}]
+51:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"          EXIT_CODE=0"}]}]
+52:["$","span",null,{"children":" "}]
+53:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"          for SKILL in ${{ steps.changed.outputs.skills }}; do"}]}]
+54:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            SUMMARY=\"eval-results/$SKILL/summary.json\""}]}]
+55:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            BASELINE=\".claude/skills/$SKILL/benchmark.json\""}]}]
+56:["$","span",null,{"children":" "}]
+57:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            if [ ! -f \"$SUMMARY\" ]; then"}]}]
+58:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"              continue"}]}]
+59:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            fi"}]}]
+5a:["$","span",null,{"children":" "}]
+5b:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            NEW_RATE=$(jq -r '.results.with_skill.pass_rate' \"$SUMMARY\")"}]}]
+5c:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            DELTA=$(jq -r '.results.delta' \"$SUMMARY\")"}]}]
+5d:["$","span",null,{"children":" "}]
+5e:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            if [ -f \"$BASELINE\" ]; then"}]}]
+5f:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"              OLD_RATE=$(jq -r '.pass_rate' \"$BASELINE\")"}]}]
+60:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"              DIFF=$(echo \"$NEW_RATE - $OLD_RATE\" | bc)"}]}]
+61:["$","span",null,{"children":" "}]
+62:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"              if (( $(echo \"$DIFF < -0.05\" | bc -l) )); then"}]}]
+63:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"                REPORT=\"$REPORT\\n❌ **$SKILL**: pass_rate $OLD_RATE → $NEW_RATE (退化 $DIFF)\""}]}]
+64:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"                EXIT_CODE=1"}]}]
+65:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"              else"}]}]
+66:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"                REPORT=\"$REPORT\\n✅ **$SKILL**: pass_rate $OLD_RATE → $NEW_RATE (delta: $DELTA)\""}]}]
+67:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"              fi"}]}]
+68:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            else"}]}]
+69:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"              REPORT=\"$REPORT\\n⚠️ **$SKILL**: pass_rate $NEW_RATE (无 baseline，首次评测)\""}]}]
+6a:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            fi"}]}]
+6b:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"          done"}]}]
+6c:["$","span",null,{"children":" "}]
+6d:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"          echo \"report<<EOF\" >> \"$GITHUB_OUTPUT\""}]}]
+6e:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"          echo -e \"$REPORT\" >> \"$GITHUB_OUTPUT\""}]}]
+6f:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"          echo \"EOF\" >> \"$GITHUB_OUTPUT\""}]}]
+70:["$","span",null,{"children":" "}]
+71:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"          exit $EXIT_CODE"}]}]
+72:["$","span",null,{"children":" "}]
+73:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"      - "}],["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"name"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"Comment on PR"}]]}]
+74:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"        if"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"always()"}]]}]
+75:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"        uses"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"actions/github-script@v7"}]]}]
+76:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"        with"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":":"}]]}]
+77:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"          script"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"|"}]]}]
+78:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            const report = `${{ steps.compare.outputs.report }}`;"}]}]
+79:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            const body = `## Skill Eval Results\\n\\n${report}\\n\\n` +"}]}]
+7a:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"              `_Auto-generated by skill-eval workflow_`;"}]}]
+7b:["$","span",null,{"children":" "}]
+7c:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            // 查找已有评论并更新，避免重复评论"}]}]
+7d:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            const comments = await github.rest.issues.listComments({"}]}]
+7e:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"              owner: context.repo.owner,"}]}]
+7f:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"              repo: context.repo.repo,"}]}]
+80:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"              issue_number: context.issue.number,"}]}]
+81:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            });"}]}]
+82:["$","span",null,{"children":" "}]
+83:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            const existing = comments.data.find(c =>"}]}]
+84:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"              c.body.includes('Skill Eval Results'));"}]}]
+85:["$","span",null,{"children":" "}]
+86:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            if (existing) {"}]}]
+87:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"              await github.rest.issues.updateComment({"}]}]
+88:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"                owner: context.repo.owner,"}]}]
+89:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"                repo: context.repo.repo,"}]}]
+8a:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"                comment_id: existing.id,"}]}]
+8b:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"                body,"}]}]
+8c:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"              });"}]}]
+8d:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            } else {"}]}]
+8e:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"              await github.rest.issues.createComment({"}]}]
+8f:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"                owner: context.repo.owner,"}]}]
+90:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"                repo: context.repo.repo,"}]}]
+91:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"                issue_number: context.issue.number,"}]}]
+92:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"                body,"}]}]
+93:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"              });"}]}]
+94:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"            }"}]}]
+95:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这个 workflow 做四件事："}]
+96:["$","ol",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-decimal x:ms-6","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"检测哪些 Skill 被改了"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"对每个改了的 Skill 跑 eval（with_skill + without_skill）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"和 baseline 对比，检查有没有退化"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"把结果评论到 PR 上"}],"\n"]}]
+97:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["触发条件是 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":".claude/skills/**"}]," 路径有变更。你改业务代码不会触发这个 workflow，只有动了 Skill 才跑。"]}]
+98:["$","h3",null,{"id":"退化阈值","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["退化阈值",["$","$La",null,{"id":"退化阈值"}]]}]
+99:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["配置里的关键数字是 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"-0.05"}],"。pass_rate 下降超过 5% 就判定为退化，CI 报错。"]}]
+9a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"为什么是 5% 而不是 0？因为 LLM 的输出有随机性。同一个 Skill、同一个 prompt，跑两次的结果不完全一样。允许 5% 的波动是务实的。"}]
+9b:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"如果你的测试用例够多（10 条以上断言），可以把阈值收紧到 3%。用例太少的话，单条断言的随机波动就会导致 pass_rate 剧烈变化。"}]
+9c:["$","h2",null,{"id":"基线管理","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["基线管理",["$","$La",null,{"id":"基线管理"}]]}]
+9d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"基线是评测的锚点。没有基线，你只知道”这次 pass_rate 是 0.85”，不知道这是进步还是退步。"}]
+9e:["$","h3",null,{"id":"benchmarkjson-版本化提交","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["benchmark.json 版本化提交",["$","$La",null,{"id":"benchmarkjson-版本化提交"}]]}]
+9f:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["每个 Skill 目录下放一个 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"benchmark.json"}],"："]}]
+a0:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lc",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"{"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"  \"version\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"2025-04-01\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"  \"skill_commit\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"abc1234\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"  \"pass_rate\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"0.85"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"  \"delta\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"0.40"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"  \"total_assertions\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"14"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"  \"passed_assertions\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"12"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"  \"eval_details\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": ["}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"    { "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"\"name\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"simple-function\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":", "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"\"pass_rate\""}],"$Lc0","$Lc1","$Lc2"]}],"\n","$Lc3","\n","$Lc4","\n","$Lc5","\n","$Lc6","\n","$Lc7"]}]]}]]}]
+a1:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这个文件提交到 git，和 Skill 一起版本管理。CI 跑 eval 时就拿它做对比。"}]
+a2:["$","h3",null,{"id":"基线更新流程","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["基线更新流程",["$","$La",null,{"id":"基线更新流程"}]]}]
+a3:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"不是每次 eval 跑完都更新基线。更新基线意味着”我认可当前的表现水平”。"}]
+a4:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"流程："}]
+a5:["$","ol",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-decimal x:ms-6","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"跑 eval，确认 pass_rate 有提升"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"人工 review eval 结果，确认提升是真实的（不是因为断言变弱了）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"更新 benchmark.json"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"在 commit message 中说明为什么更新基线"}],"\n"]}]
+a6:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lc",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"git"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" add"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" .claude/skills/code-review/benchmark.json"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"git"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" commit"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" -m"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"chore(skill): update code-review baseline to 0.88"}]]}],"\n",["$","span",null,{"children":" "}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"Added performance check rules, eval pass_rate improved from 0.85 to 0.88."}]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"Reviewed eval outputs manually, improvement is genuine.\""}]}]]}]]}]]}]
+a7:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"反模式：CI 自动更新基线。这等于取消了基线的意义——永远和上一次比，永远不退化，但也永远不知道绝对水平在哪。"}]
+a8:["$","h2",null,{"id":"eval-viewer-可视化","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["eval-viewer 可视化",["$","$La",null,{"id":"eval-viewer-可视化"}]]}]
+a9:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["eval 的原始数据是 JSON，不够直观。用 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"generate_review.py"}]," 生成交互式 HTML，可以直观地对比两次 eval 的结果。"]}]
+aa:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"生成方式："}]
+ab:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lc",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"python"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" scripts/generate_review.py"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" \\"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"  --input"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" eval-results/code-review/"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" \\"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"  --output"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" eval-results/code-review/review.html"}]]}]]}]]}]]}]
+ac:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"生成的 HTML 包含："}]
+ad:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"输出对比视图"}],"：左右分栏，with_skill 和 without_skill 的输出并排显示，差异高亮"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"断言通过率"}],"：每个 eval 用例的通过率，用颜色编码（绿/黄/红）"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"评分详情"}],"：每条断言的判定结果和理由"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"趋势图"}],"：多个 iteration 的 pass_rate 变化曲线"]}],"\n"]}]
+ae:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这个 HTML 可以作为 CI 的 artifact 上传，reviewer 在 PR 页面直接下载查看。"}]
+af:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"在 GitHub Actions 中添加 artifact 上传："}]
+b0:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lc",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"      - "}],["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"name"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"Upload eval report"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"        if"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"always()"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"        uses"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"actions/upload-artifact@v4"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"        with"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":":"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"          name"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"eval-report"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"          path"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"eval-results/"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"          retention-days"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"30"}]]}]]}]]}]]}]
+b1:["$","h2",null,{"id":"团队评测流程","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["团队评测流程",["$","$La",null,{"id":"团队评测流程"}]]}]
+b2:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"把前面的所有环节串起来，完整流程如下："}]
+b3:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lc",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"children":" 改 Skill"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"   │"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"   ▼"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":" 本地跑 eval"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"   │"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"   ├─ pass_rate 退化 → 回去改 Skill"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"   │"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"   ▼"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":" 提 PR"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"   │"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"   ▼"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":" CI 自动跑 eval ──→ 评论 PR（pass_rate 对比）"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"   │"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"   ├─ CI 失败 → 回去改 Skill"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"   │"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"   ▼"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":" Owner review"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"   │"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"   ├─ 看 eval report（下载 artifact）"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"   ├─ 看 Skill 变更的合理性"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"   ├─ 对照 checklist（第 19 章）"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"   │"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"   ▼"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":" 合并到 main"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"   │"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"   ▼"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":" 更新 baseline（如果 pass_rate 提升了）"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"   │"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"   ▼"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":" 全团队生效"}]}]]}]]}]]}]
+b4:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"几个注意点："}]
+b5:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"本地 eval 是可选但强烈推荐的。"}]," CI 跑一次 eval 可能需要几分钟（取决于测试用例数量和 API 延迟）。如果你改了 Skill 就直接提 PR 等 CI 告诉你结果，来回几次就浪费半天。在本地先跑一遍，确认没问题再提 PR。"]}]
+b6:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"CI eval 是强制的。"}]," 本地 eval 可能因为环境差异（不同的模型版本、不同的上下文状态）得到不同结果。CI 跑的 eval 是标准化的，所有人用同一个环境、同一个模型配置。"]}]
+b7:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"Owner review 不只是看 eval 数据。"}]," eval 通过只说明客观指标没退化。Owner 还需要判断：这个变更有没有必要？会不会让 Skill 膨胀（第 17 章）？新规则的措辞够不够精确（第 7 章）？"]}]
+b8:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"基线更新是显式操作。"}]," 合并 PR 之后，如果 pass_rate 提升了，Owner 手动更新 benchmark.json 并提交。这个操作本身就是一个 commit，有记录可查。"]}]
+b9:["$","h2",null,{"id":"最后一点","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["最后一点",["$","$La",null,{"id":"最后一点"}]]}]
+ba:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"评测流水线的成本不低——每次 CI 要调 API、要等结果、要上传 artifact。但这是值得付的成本。"}]
+bb:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"没有自动化评测的 Skill，就像没有自动化测试的代码。刚开始写的时候觉得”我心里有数”，三个月后就是一坨不敢动的东西。"}]
+bc:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"你团队的第一个 CI eval 不需要很完善。从最关键的那一两个 Skill 开始，跑起来再逐步完善。等团队尝到甜头——某次 PR 的 CI 评论提示”pass_rate 退化了 0.12”，reviewer 一看，果然是新规则和旧规则冲突了——以后就没人会质疑”这玩意有必要吗”。"}]
+bf:null
+c0:["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}]
+c1:["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"1.0"}]
+c2:["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" },"}]
+c3:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"    { "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"\"name\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"complex-pr\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":", "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"\"pass_rate\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"0.75"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" },"}]]}]
+c4:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"    { "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"\"name\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"security-vuln\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":", "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"\"pass_rate\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"1.0"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" },"}]]}]
+c5:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"    { "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"\"name\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"react-component\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":", "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"\"pass_rate\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"0.67"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" }"}]]}]
+c6:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  ]"}]}]
+c7:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"}"}]}]

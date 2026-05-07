@@ -1,0 +1,16 @@
+export default {
+  index: { title: '简介', display: 'hidden' },
+  'python-quickstart': '给工程师的 Python 速成',
+  'text-to-vector': '从文字到向量',
+  'attention': 'Attention 机制',
+  'multi-head-attention': 'Multi-Head Attention',
+  'transformer-architecture': 'Transformer 完整架构',
+  'architecture-variants': '三种架构变体',
+  'huggingface': 'HuggingFace 生态',
+  'embeddings': 'Embedding 的工程用法',
+  'finetuning': '微调',
+  'inference': '推理工程',
+  'semantic-search': '实战一——语义搜索引擎',
+  'rag': '实战二——文档问答系统（RAG）',
+  'typescript': '实战三——TypeScript 集成方案',
+};

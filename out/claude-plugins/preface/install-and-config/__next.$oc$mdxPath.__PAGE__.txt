@@ -1,0 +1,265 @@
+1:"$Sreact.fragment"
+2:I[55169,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"TOCProvider"]
+3:I[769,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"Sidebar"]
+4:I[47486,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ClientWrapper"]
+9:I[63894,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"HeadingAnchor"]
+a:I[83987,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ToggleWordWrapButton"]
+b:I[40493,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"CopyToClipboard"]
+50:I[97367,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"OutletBoundary"]
+51:"$Sreact.suspense"
+5:T1c2a,# 插件的安装配置与管理
+
+## 安装插件
+
+### 从官方插件目录安装
+
+最常用的方式，一行命令：
+
+```bash
+/plugin install plugin-name@claude-plugins-official
+```
+
+比如装 GitHub 集成插件：
+
+```bash
+/plugin install github@claude-plugins-official
+```
+
+`@claude-plugins-official` 指定了插件来源是 Anthropic 官方仓库。`/external_plugins` 目录下的第三方插件也在这个仓库里，安装方式一样——但它们由第三方开发者维护，Anthropic 不对其质量和安全性做保证。
+
+### 浏览并安装
+
+如果你不确定要装哪个，可以用发现功能：
+
+```bash
+/plugin > Discover
+```
+
+这会列出可用的插件供你选择。在交互式列表里浏览比记命令名方便。
+
+### 本地开发模式
+
+开发自己的插件时，不需要把它发布到仓库。直接指定本地目录：
+
+```bash
+claude --plugin-dir /path/to/my-plugin
+```
+
+或者简写：
+
+```bash
+cc --plugin-dir /path/to/my-plugin
+```
+
+这种方式下，每次启动 Claude Code 都需要带上 `--plugin-dir` 参数。改了插件代码后重启 Claude Code 即可生效（hooks 除外——hooks 只在会话启动时加载）。
+
+## 查看已安装的插件
+
+```bash
+/plugin
+```
+
+不带参数直接执行 `/plugin` 命令，会进入插件管理界面，列出所有已安装的插件及其状态。
+
+要查看当前加载的 hooks，可以用：
+
+```bash
+/hooks
+```
+
+这会显示所有已注册的 hooks，包括来自插件和用户配置的。调试 hook 不生效的问题时这个命令很有用。
+
+## 更新插件
+
+插件更新目前的体验比较粗糙。没有 `/plugin update` 这样的一键更新命令。实际操作取决于你的安装方式：
+
+**从官方目录安装的插件**：重新执行 install 命令会拉取最新版本：
+
+```bash
+/plugin install plugin-name@claude-plugins-official
+```
+
+**本地开发的插件**：直接改文件就行，重启 Claude Code 生效。
+
+关于版本管理：`plugin.json` 里有 `version` 字段，但目前 Claude Code 的插件系统对语义化版本的支持还很初级。不要指望它能帮你做版本冲突检测或者自动回滚。
+
+## 卸载插件
+
+通过 `/plugin` 命令进入管理界面，选择要卸载的插件执行卸载操作。
+
+本地开发模式的插件不存在卸载的问题——不传 `--plugin-dir` 参数就行了。
+
+## 插件的权限管理
+
+插件的权限体系是个重要话题，因为它直接影响安全性。
+
+### 工具权限
+
+每个 Command 和 Agent 可以通过 `allowed-tools` / `tools` 字段声明需要预授权的工具：
+
+```markdown
+---
+allowed-tools: [Read, Glob, Grep, Bash]
+---
+```
+
+列在这里的工具在该命令执行期间不会弹确认框。没列的工具仍然需要用户逐次确认。
+
+这是一种便利性和安全性的权衡。如果你写了一个命令需要大量读文件，不预授权 Read 的话每次都要点确认，体验很差。但预授权 Bash 就意味着命令执行期间可以不经确认地跑任意 shell 命令，要想清楚。
+
+### MCP 服务器的权限
+
+MCP 服务器提供的工具在被调用时也会触发权限确认。这个行为跟内置工具一样。
+
+但有一点不同：MCP 服务器本身的启动不需要额外确认——它在插件启用时就自动启动了。所以安装一个带 MCP 的插件，实际上就是同意它在后台运行一个服务进程。
+
+### Hooks 的权限
+
+Hooks 是权限模型里最敏感的部分。Command 类型的 hook 可以执行任意 shell 命令，而且是自动触发的——每次 Claude 调用匹配的工具时，hook 脚本就会执行。
+
+插件安装时 Claude Code 会提示用户审查插件包含的 hooks。但说实话，大多数用户不会逐行读 hook 脚本。所以 README 里写清楚 hooks 干了什么，对建立信任很重要。
+
+### 信任边界
+
+仓库 README 开头的警告值得重复一遍：
+
+> Anthropic does not control what MCP servers, files, or other software are included in plugins and cannot verify that they will work as intended or that they won't change.
+
+即使是 `/plugins` 目录下 Anthropic 自己的插件，也不代表 Anthropic 做了安全审计。`/external_plugins` 下的第三方插件更是如此。装插件之前看一眼它的源码，尤其是 hooks 脚本和 MCP 配置，是个好习惯。
+
+## 插件的作用域
+
+### 全局 vs 项目级
+
+Claude Code 的插件有两个作用域层级：
+
+**全局安装的插件**对你所有的 Claude Code 会话生效。通过 `/plugin install` 安装的插件默认就是全局的。
+
+**项目级插件**只在特定项目目录下生效。使用 `--plugin-dir` 指向项目内的插件目录时，它只在当前会话中生效。
+
+如果你希望某个插件只对特定项目起作用，可以把插件目录放在项目内部，然后通过项目级的启动配置来加载。
+
+### 作用域冲突
+
+当全局插件和项目级插件定义了同名的 command 或 skill 时，具体的优先级行为可能因版本而异。目前的经验是：同名 command 会产生冲突，Claude Code 会警告你。给命令加前缀（比如 `pluginname:command`）可以避免这个问题——仓库里不少插件已经这么做了，比如 plugin-dev 的 `/plugin-dev:create-plugin`。
+
+### Hooks 的合并
+
+不同来源的 hooks 不会互相覆盖，而是合并后并行执行。你的用户级 hooks、全局插件的 hooks、项目级插件的 hooks 会同时生效。
+
+这意味着如果两个插件都注册了 `PreToolUse` hook 来检查 Write 操作，两个 hook 都会跑。但它们互相看不到对方的输出，执行顺序也不确定。设计 hook 时不能假设有其他 hook 存在，也不能依赖执行顺序。
+
+## 快速排错
+
+插件不工作时，先跑这三步：
+
+1. `claude --debug` 启动，看插件加载日志
+2. `/hooks` 确认 hook 是否注册成功
+3. 检查所有 JSON 文件的语法（`python3 -m json.tool < hooks/hooks.json`）
+
+最常踩的两个坑：
+
+- **改了 hooks.json 没重启 Claude Code**。Hooks 只在会话启动时加载，运行中改不会生效。
+- **路径没用 `${CLAUDE_PLUGIN_ROOT}`**。hooks.json 和 .mcp.json 里写 `./scripts/xxx.sh` 是不行的，工作目录不是插件目录。
+
+更完整的问题分类和排查方法见**附录·常见问题与排错**。
+
+## 开发阶段的工作流建议
+
+如果你打算边读本书边动手改插件做实验，推荐这个工作流：
+
+```bash
+# 1. 把官方仓库 clone 到本地
+git clone https://github.com/anthropics/claude-plugins-official.git
+
+# 2. 用 --plugin-dir 加载你感兴趣的插件
+claude --plugin-dir ./claude-plugins-official/plugins/plugin-dev
+
+# 3. 改了代码后退出重进
+# Ctrl+C 退出当前会话，重新执行上面的命令
+
+# 4. 调试模式看详细日志
+claude --debug --plugin-dir ./claude-plugins-official/plugins/plugin-dev
+```
+
+多个插件可以同时加载：
+
+```bash
+claude \
+  --plugin-dir ./claude-plugins-official/plugins/plugin-dev \
+  --plugin-dir ./claude-plugins-official/plugins/code-review
+```
+
+这种本地加载方式不影响你全局安装的插件，两边互不干扰。实验完想清理干净，不传 `--plugin-dir` 就回到了只有全局插件的状态。0:{"rsc":["$","$1","c",{"children":[["$","div",null,{"className":"x:mx-auto x:flex x:max-w-(--nextra-content-width)","children":["$","$L2",null,{"value":[{"value":"安装插件","id":"安装插件","depth":2},{"value":"从官方插件目录安装","id":"从官方插件目录安装","depth":3},{"value":"浏览并安装","id":"浏览并安装","depth":3},{"value":"本地开发模式","id":"本地开发模式","depth":3},{"value":"查看已安装的插件","id":"查看已安装的插件","depth":2},{"value":"更新插件","id":"更新插件","depth":2},{"value":"卸载插件","id":"卸载插件","depth":2},{"value":"插件的权限管理","id":"插件的权限管理","depth":2},{"value":"工具权限","id":"工具权限","depth":3},{"value":"MCP 服务器的权限","id":"mcp-服务器的权限","depth":3},{"value":"Hooks 的权限","id":"hooks-的权限","depth":3},{"value":"信任边界","id":"信任边界","depth":3},{"value":"插件的作用域","id":"插件的作用域","depth":2},{"value":"全局 vs 项目级","id":"全局-vs-项目级","depth":3},{"value":"作用域冲突","id":"作用域冲突","depth":3},{"value":"Hooks 的合并","id":"hooks-的合并","depth":3},{"value":"快速排错","id":"快速排错","depth":2},{"value":"开发阶段的工作流建议","id":"开发阶段的工作流建议","depth":2}],"children":[["$","$L3",null,{}],["$","$L4",null,{"metadata":{"title":"插件的安装配置与管理","filePath":"content/claude-plugins/preface/install-and-config.md","timestamp":1778089813000},"sourceCode":"$5","children":["$L6","$L7"]}]]}]}],null,"$L8"]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"CR_c9URqh-5K47K_DC-c1"}
+6:["$","div",null,{"id":"nextra-skip-nav"}]
+7:["$","main",null,{"data-pagefind-body":true,"children":[["$","script",null,{"type":"application/ld+json","dangerouslySetInnerHTML":{"__html":"{\"@context\":\"https://schema.org\",\"@graph\":[{\"@type\":\"TechArticle\",\"@id\":\"https://inferloop.dev/claude-plugins/preface/install-and-config#article\",\"headline\":\"插件的安装配置与管理\",\"description\":\"最常用的方式，一行命令：\",\"inLanguage\":\"zh-CN\",\"author\":{\"@type\":\"Person\",\"name\":\"递归客\"},\"publisher\":{\"@type\":\"Organization\",\"name\":\"InferLoop\",\"url\":\"https://inferloop.dev\"},\"isPartOf\":{\"@type\":\"Book\",\"name\":\"Claude 插件官方指南\",\"url\":\"https://inferloop.dev/claude-plugins\",\"image\":\"https://images.redream.cn/images/XwX564.png\"},\"mainEntityOfPage\":{\"@type\":\"WebPage\",\"@id\":\"https://inferloop.dev/claude-plugins/preface/install-and-config\"},\"image\":\"https://images.redream.cn/images/XwX564.png\"},{\"@type\":\"BreadcrumbList\",\"itemListElement\":[{\"@type\":\"ListItem\",\"position\":1,\"name\":\"首页\",\"item\":\"https://inferloop.dev\"},{\"@type\":\"ListItem\",\"position\":2,\"name\":\"Claude 插件官方指南\",\"item\":\"https://inferloop.dev/claude-plugins\"},{\"@type\":\"ListItem\",\"position\":3,\"name\":\"插件的安装配置与管理\",\"item\":\"https://inferloop.dev/claude-plugins/preface/install-and-config\"}]}]}"}}],[["$","h1",null,{"className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-bold x:mt-2 x:text-4xl","children":["插件的安装配置与管理","$undefined"]}],"\n",["$","h2",null,{"id":"安装插件","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["安装插件",["$","$L9",null,{"id":"安装插件"}]]}],"\n",["$","h3",null,{"id":"从官方插件目录安装","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["从官方插件目录安装",["$","$L9",null,{"id":"从官方插件目录安装"}]]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"最常用的方式，一行命令："}],"\n",["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$La",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lb",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"/plugin"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" install"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" plugin-name@claude-plugins-official"}]]}]}]]}]]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"比如装 GitHub 集成插件："}],"\n",["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":["$Lc","$Ld"]}]]}],"\n","$Le","\n","$Lf","\n","$L10","\n","$L11","\n","$L12","\n","$L13","\n","$L14","\n","$L15","\n","$L16","\n","$L17","\n","$L18","\n","$L19","\n","$L1a","\n","$L1b","\n","$L1c","\n","$L1d","\n","$L1e","\n","$L1f","\n","$L20","\n","$L21","\n","$L22","\n","$L23","\n","$L24","\n","$L25","\n","$L26","\n","$L27","\n","$L28","\n","$L29","\n","$L2a","\n","$L2b","\n","$L2c","\n","$L2d","\n","$L2e","\n","$L2f","\n","$L30","\n","$L31","\n","$L32","\n","$L33","\n","$L34","\n","$L35","\n","$L36","\n","$L37","\n","$L38","\n","$L39","\n","$L3a","\n","$L3b","\n","$L3c","\n","$L3d","\n","$L3e","\n","$L3f","\n","$L40","\n","$L41","\n","$L42","\n","$L43","\n","$L44","\n","$L45","\n","$L46","\n","$L47","\n","$L48","\n","$L49","\n","$L4a","\n","$L4b","\n","$L4c","\n","$L4d","\n","$L4e","\n","$L4f"]]}]
+8:["$","$L50",null,{"children":["$","$51",null,{"name":"Next.MetadataOutlet","children":"$@52"}]}]
+c:["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$La",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lb",null,{"className":""}]]}]
+d:["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"/plugin"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" install"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" github@claude-plugins-official"}]]}]}]
+e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","code",null,{"className":"nextra-code","dir":"ltr","children":"@claude-plugins-official"}]," 指定了插件来源是 Anthropic 官方仓库。",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"/external_plugins"}]," 目录下的第三方插件也在这个仓库里，安装方式一样——但它们由第三方开发者维护，Anthropic 不对其质量和安全性做保证。"]}]
+f:["$","h3",null,{"id":"浏览并安装","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["浏览并安装",["$","$L9",null,{"id":"浏览并安装"}]]}]
+10:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"如果你不确定要装哪个，可以用发现功能："}]
+11:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$La",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lb",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"/plugin"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":" >"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" Discover"}]]}]}]]}]]}]
+12:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这会列出可用的插件供你选择。在交互式列表里浏览比记命令名方便。"}]
+13:["$","h3",null,{"id":"本地开发模式","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["本地开发模式",["$","$L9",null,{"id":"本地开发模式"}]]}]
+14:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"开发自己的插件时，不需要把它发布到仓库。直接指定本地目录："}]
+15:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$La",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lb",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"claude"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" --plugin-dir"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" /path/to/my-plugin"}]]}]}]]}]]}]
+16:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"或者简写："}]
+17:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$La",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lb",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"cc"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" --plugin-dir"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" /path/to/my-plugin"}]]}]}]]}]]}]
+18:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["这种方式下，每次启动 Claude Code 都需要带上 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"--plugin-dir"}]," 参数。改了插件代码后重启 Claude Code 即可生效（hooks 除外——hooks 只在会话启动时加载）。"]}]
+19:["$","h2",null,{"id":"查看已安装的插件","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["查看已安装的插件",["$","$L9",null,{"id":"查看已安装的插件"}]]}]
+1a:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$La",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lb",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"/plugin"}]}]}]]}]]}]
+1b:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["不带参数直接执行 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"/plugin"}]," 命令，会进入插件管理界面，列出所有已安装的插件及其状态。"]}]
+1c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"要查看当前加载的 hooks，可以用："}]
+1d:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$La",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lb",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"/hooks"}]}]}]]}]]}]
+1e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这会显示所有已注册的 hooks，包括来自插件和用户配置的。调试 hook 不生效的问题时这个命令很有用。"}]
+1f:["$","h2",null,{"id":"更新插件","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["更新插件",["$","$L9",null,{"id":"更新插件"}]]}]
+20:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["插件更新目前的体验比较粗糙。没有 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"/plugin update"}]," 这样的一键更新命令。实际操作取决于你的安装方式："]}]
+21:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"从官方目录安装的插件"}],"：重新执行 install 命令会拉取最新版本："]}]
+22:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$La",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lb",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"/plugin"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" install"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" plugin-name@claude-plugins-official"}]]}]}]]}]]}]
+23:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"本地开发的插件"}],"：直接改文件就行，重启 Claude Code 生效。"]}]
+24:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["关于版本管理：",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"plugin.json"}]," 里有 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"version"}]," 字段，但目前 Claude Code 的插件系统对语义化版本的支持还很初级。不要指望它能帮你做版本冲突检测或者自动回滚。"]}]
+25:["$","h2",null,{"id":"卸载插件","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["卸载插件",["$","$L9",null,{"id":"卸载插件"}]]}]
+26:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["通过 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"/plugin"}]," 命令进入管理界面，选择要卸载的插件执行卸载操作。"]}]
+27:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["本地开发模式的插件不存在卸载的问题——不传 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"--plugin-dir"}]," 参数就行了。"]}]
+28:["$","h2",null,{"id":"插件的权限管理","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["插件的权限管理",["$","$L9",null,{"id":"插件的权限管理"}]]}]
+29:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"插件的权限体系是个重要话题，因为它直接影响安全性。"}]
+2a:["$","h3",null,{"id":"工具权限","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["工具权限",["$","$L9",null,{"id":"工具权限"}]]}]
+2b:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["每个 Command 和 Agent 可以通过 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"allowed-tools"}]," / ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"tools"}]," 字段声明需要预授权的工具："]}]
+2c:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$La",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lb",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"---"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"allowed-tools"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": ["}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"Read"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":", "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"Glob"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":", "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"Grep"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":", "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"Bash"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"]"}]]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"---"}]}]]}]]}]]}]
+2d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"列在这里的工具在该命令执行期间不会弹确认框。没列的工具仍然需要用户逐次确认。"}]
+2e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这是一种便利性和安全性的权衡。如果你写了一个命令需要大量读文件，不预授权 Read 的话每次都要点确认，体验很差。但预授权 Bash 就意味着命令执行期间可以不经确认地跑任意 shell 命令，要想清楚。"}]
+2f:["$","h3",null,{"id":"mcp-服务器的权限","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["MCP 服务器的权限",["$","$L9",null,{"id":"mcp-服务器的权限"}]]}]
+30:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"MCP 服务器提供的工具在被调用时也会触发权限确认。这个行为跟内置工具一样。"}]
+31:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"但有一点不同：MCP 服务器本身的启动不需要额外确认——它在插件启用时就自动启动了。所以安装一个带 MCP 的插件，实际上就是同意它在后台运行一个服务进程。"}]
+32:["$","h3",null,{"id":"hooks-的权限","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["Hooks 的权限",["$","$L9",null,{"id":"hooks-的权限"}]]}]
+33:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Hooks 是权限模型里最敏感的部分。Command 类型的 hook 可以执行任意 shell 命令，而且是自动触发的——每次 Claude 调用匹配的工具时，hook 脚本就会执行。"}]
+34:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"插件安装时 Claude Code 会提示用户审查插件包含的 hooks。但说实话，大多数用户不会逐行读 hook 脚本。所以 README 里写清楚 hooks 干了什么，对建立信任很重要。"}]
+35:["$","h3",null,{"id":"信任边界","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["信任边界",["$","$L9",null,{"id":"信任边界"}]]}]
+36:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"仓库 README 开头的警告值得重复一遍："}]
+37:["$","blockquote",null,{"className":"x:not-first:mt-[1.25em] x:border-gray-300 x:italic x:text-gray-700 x:dark:border-gray-700 x:dark:text-gray-400 x:border-s-2 x:ps-[1.5em]","children":["\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Anthropic does not control what MCP servers, files, or other software are included in plugins and cannot verify that they will work as intended or that they won’t change."}],"\n"]}]
+38:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["即使是 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"/plugins"}]," 目录下 Anthropic 自己的插件，也不代表 Anthropic 做了安全审计。",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"/external_plugins"}]," 下的第三方插件更是如此。装插件之前看一眼它的源码，尤其是 hooks 脚本和 MCP 配置，是个好习惯。"]}]
+39:["$","h2",null,{"id":"插件的作用域","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["插件的作用域",["$","$L9",null,{"id":"插件的作用域"}]]}]
+3a:["$","h3",null,{"id":"全局-vs-项目级","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["全局 vs 项目级",["$","$L9",null,{"id":"全局-vs-项目级"}]]}]
+3b:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Claude Code 的插件有两个作用域层级："}]
+3c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"全局安装的插件"}],"对你所有的 Claude Code 会话生效。通过 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"/plugin install"}]," 安装的插件默认就是全局的。"]}]
+3d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"项目级插件"}],"只在特定项目目录下生效。使用 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"--plugin-dir"}]," 指向项目内的插件目录时，它只在当前会话中生效。"]}]
+3e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"如果你希望某个插件只对特定项目起作用，可以把插件目录放在项目内部，然后通过项目级的启动配置来加载。"}]
+3f:["$","h3",null,{"id":"作用域冲突","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["作用域冲突",["$","$L9",null,{"id":"作用域冲突"}]]}]
+40:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["当全局插件和项目级插件定义了同名的 command 或 skill 时，具体的优先级行为可能因版本而异。目前的经验是：同名 command 会产生冲突，Claude Code 会警告你。给命令加前缀（比如 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"pluginname:command"}],"）可以避免这个问题——仓库里不少插件已经这么做了，比如 plugin-dev 的 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"/plugin-dev:create-plugin"}],"。"]}]
+41:["$","h3",null,{"id":"hooks-的合并","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["Hooks 的合并",["$","$L9",null,{"id":"hooks-的合并"}]]}]
+42:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"不同来源的 hooks 不会互相覆盖，而是合并后并行执行。你的用户级 hooks、全局插件的 hooks、项目级插件的 hooks 会同时生效。"}]
+43:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["这意味着如果两个插件都注册了 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"PreToolUse"}]," hook 来检查 Write 操作，两个 hook 都会跑。但它们互相看不到对方的输出，执行顺序也不确定。设计 hook 时不能假设有其他 hook 存在，也不能依赖执行顺序。"]}]
+44:["$","h2",null,{"id":"快速排错","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["快速排错",["$","$L9",null,{"id":"快速排错"}]]}]
+45:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"插件不工作时，先跑这三步："}]
+46:["$","ol",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-decimal x:ms-6","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","code",null,{"className":"nextra-code","dir":"ltr","children":"claude --debug"}]," 启动，看插件加载日志"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","code",null,{"className":"nextra-code","dir":"ltr","children":"/hooks"}]," 确认 hook 是否注册成功"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":["检查所有 JSON 文件的语法（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"python3 -m json.tool < hooks/hooks.json"}],"）"]}],"\n"]}]
+47:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"最常踩的两个坑："}]
+48:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"改了 hooks.json 没重启 Claude Code"}],"。Hooks 只在会话启动时加载，运行中改不会生效。"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":["路径没用 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"$${CLAUDE_PLUGIN_ROOT}"}]]}],"。hooks.json 和 .mcp.json 里写 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"./scripts/xxx.sh"}]," 是不行的，工作目录不是插件目录。"]}],"\n"]}]
+49:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["更完整的问题分类和排查方法见",["$","strong",null,{"children":"附录·常见问题与排错"}],"。"]}]
+4a:["$","h2",null,{"id":"开发阶段的工作流建议","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["开发阶段的工作流建议",["$","$L9",null,{"id":"开发阶段的工作流建议"}]]}]
+4b:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"如果你打算边读本书边动手改插件做实验，推荐这个工作流："}]
+4c:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$La",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lb",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# 1. 把官方仓库 clone 到本地"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"git"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" clone"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" https://github.com/anthropics/claude-plugins-official.git"}]]}],"\n",["$","span",null,{"children":" "}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# 2. 用 --plugin-dir 加载你感兴趣的插件"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"claude"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" --plugin-dir"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" ./claude-plugins-official/plugins/plugin-dev"}]]}],"\n",["$","span",null,{"children":" "}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# 3. 改了代码后退出重进"}]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# Ctrl+C 退出当前会话，重新执行上面的命令"}]}],"\n",["$","span",null,{"children":" "}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# 4. 调试模式看详细日志"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"claude"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" --debug"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" --plugin-dir"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" ./claude-plugins-official/plugins/plugin-dev"}]]}]]}]]}]]}]
+4d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"多个插件可以同时加载："}]
+4e:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$La",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$Lb",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"claude"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" \\"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"  --plugin-dir"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" ./claude-plugins-official/plugins/plugin-dev"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" \\"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"  --plugin-dir"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" ./claude-plugins-official/plugins/code-review"}]]}]]}]]}]]}]
+4f:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["这种本地加载方式不影响你全局安装的插件，两边互不干扰。实验完想清理干净，不传 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"--plugin-dir"}]," 就回到了只有全局插件的状态。"]}]
+52:null

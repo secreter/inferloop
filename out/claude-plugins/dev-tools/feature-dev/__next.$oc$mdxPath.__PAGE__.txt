@@ -1,0 +1,153 @@
+1:"$Sreact.fragment"
+2:I[55169,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"TOCProvider"]
+3:I[769,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"Sidebar"]
+4:I[47486,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ClientWrapper"]
+a:I[63894,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"HeadingAnchor"]
+b:I[83987,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ToggleWordWrapButton"]
+2f:I[97367,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"OutletBoundary"]
+30:"$Sreact.suspense"
+32:I[40493,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"CopyToClipboard"]
+5:T1721,# feature-dev：结构化功能开发工作流
+
+一套七阶段的功能开发流程。不是直接写代码，而是先理解代码库、问清楚需求、设计架构方案、选定后再实现，最后代码审查。通过三类 subagent（code-explorer、code-architect、code-reviewer）并行工作。
+
+## 技术原理
+
+插件包含一个 slash command（`/feature-dev`）和三个 agent 定义。核心逻辑全在 command 文件里——它是一份给 Claude 的分阶段工作指令。
+
+### 七阶段流程
+
+**Phase 1: Discovery** —— 理解需求。如果用户的描述含糊，Claude 会主动追问：解决什么问题？有什么约束？期望什么结果？
+
+**Phase 2: Codebase Exploration** —— 这一步是这个插件最有意思的地方。Claude 会并行启动 2-3 个 `code-explorer` subagent，每个探索不同维度：
+
+```
+- "Find features similar to [feature] and trace implementation"
+- "Map the architecture and abstractions for [area]"
+- "Analyze current implementation of [related feature]"
+```
+
+每个 subagent 跑在独立的上下文窗口里，用 sonnet 模型，有 Glob、Grep、Read 等只读工具。它们的任务是追踪代码执行路径——从入口点到数据存储，经过所有抽象层，记录关键文件路径和行号。
+
+subagent 返回后，Claude 会读取它们标注的所有关键文件，构建对现有代码的深度理解。
+
+**Phase 3: Clarifying Questions** —— 命令里用了加粗和大写标注：**CRITICAL: This is one of the most important phases. DO NOT SKIP.** 这说明在实际使用中，Claude 经常想跳过这步直接开干。这个阶段的要求是：列出所有含糊的地方——边界情况、错误处理、集成点、向后兼容、性能需求——然后等用户回答。
+
+**Phase 4: Architecture Design** —— 并行启动 2-3 个 `code-architect` subagent，各自用不同策略：
+- 最小改动：最少的变更、最大化复用
+- 清晰架构：可维护性优先、抽象设计
+- 务实平衡：速度和质量折中
+
+Claude 汇总所有方案，形成自己的推荐意见，然后让用户选。
+
+**Phase 5: Implementation** —— 需要用户明确批准才开始。写代码时严格遵循 Phase 2 发现的代码风格和 Phase 4 选定的架构。
+
+**Phase 6: Quality Review** —— 并行启动 3 个 `code-reviewer` subagent：
+- 简洁性/DRY/可读性
+- bug/逻辑正确性
+- 项目规范/抽象一致性
+
+每个 reviewer 对发现的问题标注置信度（0-100），只报告置信度 80 以上的。这个阈值设定是为了减少误报——误报太多会让人烦了直接忽略。
+
+**Phase 7: Summary** —— 输出完成报告：做了什么、关键决策、修改了哪些文件、下一步建议。
+
+### Agent 设计
+
+三个 agent 的共同特点：
+
+- 都用 sonnet 模型，不用 opus——在 subagent 场景下 sonnet 的性价比更高
+- 都有 `color` 字段（yellow、green、red），终端里能直观区分
+- tools 列表中有 `BashOutput`（Bash 工具的只读输出变体）和 `KillShell`（终止挂起的 shell 进程），但没有 `Write` 和 `Edit`——explorer 和 reviewer 是只读的
+- code-architect 也没有写权限，它只输出设计蓝图，不动代码
+
+code-reviewer 的 description 里明确写了"review unstaged changes from `git diff`"——默认审查未提交的变更，不是整个代码库。
+
+## 安装与配置
+
+```bash
+/plugin install feature-dev@claude-plugins-official
+```
+
+无额外依赖。需要在 git 仓库里使用（Phase 6 依赖 git diff）。
+
+## 使用方法
+
+```
+/feature-dev 给 API 端点加上速率限制
+```
+
+或者不带参数：
+
+```
+/feature-dev
+```
+
+Claude 会问你想做什么。
+
+也可以单独调用 agent，不走完整流程：
+
+```
+启动 code-explorer 看一下认证模块是怎么实现的
+```
+
+```
+启动 code-reviewer 检查我刚写的代码
+```
+
+## 使用场景
+
+**中大型功能开发**。涉及多个文件、需要架构决策的功能。比如"给现有系统加 OAuth 登录"——需要先理解现有的认证机制、会话管理、路由结构，再决定怎么集成。这正是 Phase 2 和 Phase 4 发力的地方。
+
+**不熟悉的代码库里做开发**。接手一个不了解的项目要加功能，Phase 2 的代码探索能帮你快速建立对项目的理解。三个 explorer 并行跑，各自追踪不同维度，比自己一个文件一个文件读高效得多。
+
+**需要多种方案对比的场景**。Phase 4 的多架构方案设计在做技术决策时很有用。"最小改动"方案能看到 quick fix 的样子，"清晰架构"方案能看到理想重构的样子，"务实平衡"方案居中。各自的 trade-off 摆出来，选起来有谱。
+
+**单独用 code-reviewer 做代码审查**。不走完整流程，只在写完代码后启动 code-reviewer。它会读 CLAUDE.md 里的项目规范，对照检查代码。置信度过滤保证了报出来的问题多数是真问题。
+
+## 局限与注意事项
+
+- 完整七阶段流程很耗时间和 token。简单的 bug 修复或者改个配置文件，不要用这个插件，直接做就行
+- Phase 2 的 subagent 探索在大代码库上可能跑很久。官方说法是"this is normal for large codebases"，但如果你的项目有几万个文件，等待时间会比较可观
+- Phase 3 问的问题有时候太多。如果你对需求很明确，可以说"你觉得合理就行"来跳过，但 Claude 会给出它的建议再让你确认，不会完全跳过
+- Phase 4 生成的架构方案质量取决于 Phase 2 的代码探索结果。如果 explorer 没找到相关的代码，architect 设计的方案可能脱离项目实际
+- 三个 agent 都不能执行写操作。所有代码修改都由主会话的 Claude 完成，subagent 只负责分析和审查
+- 命令里用了 `TodoWrite` 跟踪进度。如果你的 Claude Code 环境不支持 TodoWrite 工具，部分流程会有差异0:{"rsc":["$","$1","c",{"children":[["$","div",null,{"className":"x:mx-auto x:flex x:max-w-(--nextra-content-width)","children":["$","$L2",null,{"value":[{"value":"技术原理","id":"技术原理","depth":2},{"value":"七阶段流程","id":"七阶段流程","depth":3},{"value":"Agent 设计","id":"agent-设计","depth":3},{"value":"安装与配置","id":"安装与配置","depth":2},{"value":"使用方法","id":"使用方法","depth":2},{"value":"使用场景","id":"使用场景","depth":2},{"value":"局限与注意事项","id":"局限与注意事项","depth":2}],"children":[["$","$L3",null,{}],["$","$L4",null,{"metadata":{"title":"feature-dev：结构化功能开发工作流","filePath":"content/claude-plugins/dev-tools/feature-dev.md","timestamp":1778089813000},"sourceCode":"$5","children":["$L6","$L7"]}]]}]}],null,"$L8"]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"CR_c9URqh-5K47K_DC-c1"}
+6:["$","div",null,{"id":"nextra-skip-nav"}]
+9:T548,{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://inferloop.dev/claude-plugins/dev-tools/feature-dev#article","headline":"feature-dev：结构化功能开发工作流","description":"一套七阶段的功能开发流程。不是直接写代码，而是先理解代码库、问清楚需求、设计架构方案、选定后再实现，最后代码审查。通过三类 subagent（code-explorer、code-architect、code-reviewer）并行工作。","inLanguage":"zh-CN","author":{"@type":"Person","name":"递归客"},"publisher":{"@type":"Organization","name":"InferLoop","url":"https://inferloop.dev"},"isPartOf":{"@type":"Book","name":"Claude 插件官方指南","url":"https://inferloop.dev/claude-plugins","image":"https://images.redream.cn/images/XwX564.png"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://inferloop.dev/claude-plugins/dev-tools/feature-dev"},"image":"https://images.redream.cn/images/XwX564.png"},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"首页","item":"https://inferloop.dev"},{"@type":"ListItem","position":2,"name":"Claude 插件官方指南","item":"https://inferloop.dev/claude-plugins"},{"@type":"ListItem","position":3,"name":"feature-dev：结构化功能开发工作流","item":"https://inferloop.dev/claude-plugins/dev-tools/feature-dev"}]}]}7:["$","main",null,{"data-pagefind-body":true,"children":[["$","script",null,{"type":"application/ld+json","dangerouslySetInnerHTML":{"__html":"$9"}}],[["$","h1",null,{"className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-bold x:mt-2 x:text-4xl","children":["feature-dev：结构化功能开发工作流","$undefined"]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"一套七阶段的功能开发流程。不是直接写代码，而是先理解代码库、问清楚需求、设计架构方案、选定后再实现，最后代码审查。通过三类 subagent（code-explorer、code-architect、code-reviewer）并行工作。"}],"\n",["$","h2",null,{"id":"技术原理","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["技术原理",["$","$La",null,{"id":"技术原理"}]]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["插件包含一个 slash command（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"/feature-dev"}],"）和三个 agent 定义。核心逻辑全在 command 文件里——它是一份给 Claude 的分阶段工作指令。"]}],"\n",["$","h3",null,{"id":"七阶段流程","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["七阶段流程",["$","$La",null,{"id":"七阶段流程"}]]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"Phase 1: Discovery"}]," —— 理解需求。如果用户的描述含糊，Claude 会主动追问：解决什么问题？有什么约束？期望什么结果？"]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"Phase 2: Codebase Exploration"}]," —— 这一步是这个插件最有意思的地方。Claude 会并行启动 2-3 个 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"code-explorer"}]," subagent，每个探索不同维度："]}],"\n",["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],"$Lc"]}],"$Ld"]}]]}],"\n","$Le","\n","$Lf","\n","$L10","\n","$L11","\n","$L12","\n","$L13","\n","$L14","\n","$L15","\n","$L16","\n","$L17","\n","$L18","\n","$L19","\n","$L1a","\n","$L1b","\n","$L1c","\n","$L1d","\n","$L1e","\n","$L1f","\n","$L20","\n","$L21","\n","$L22","\n","$L23","\n","$L24","\n","$L25","\n","$L26","\n","$L27","\n","$L28","\n","$L29","\n","$L2a","\n","$L2b","\n","$L2c","\n","$L2d","\n","$L2e"]]}]
+8:["$","$L2f",null,{"children":["$","$30",null,{"name":"Next.MetadataOutlet","children":"$@31"}]}]
+c:["$","$L32",null,{"className":""}]
+d:["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"children":"- \"Find features similar to [feature] and trace implementation\""}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"- \"Map the architecture and abstractions for [area]\""}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"- \"Analyze current implementation of [related feature]\""}]}]]}]
+e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"每个 subagent 跑在独立的上下文窗口里，用 sonnet 模型，有 Glob、Grep、Read 等只读工具。它们的任务是追踪代码执行路径——从入口点到数据存储，经过所有抽象层，记录关键文件路径和行号。"}]
+f:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"subagent 返回后，Claude 会读取它们标注的所有关键文件，构建对现有代码的深度理解。"}]
+10:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"Phase 3: Clarifying Questions"}]," —— 命令里用了加粗和大写标注：",["$","strong",null,{"children":"CRITICAL: This is one of the most important phases. DO NOT SKIP."}]," 这说明在实际使用中，Claude 经常想跳过这步直接开干。这个阶段的要求是：列出所有含糊的地方——边界情况、错误处理、集成点、向后兼容、性能需求——然后等用户回答。"]}]
+11:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"Phase 4: Architecture Design"}]," —— 并行启动 2-3 个 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"code-architect"}]," subagent，各自用不同策略："]}]
+12:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"最小改动：最少的变更、最大化复用"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"清晰架构：可维护性优先、抽象设计"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"务实平衡：速度和质量折中"}],"\n"]}]
+13:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Claude 汇总所有方案，形成自己的推荐意见，然后让用户选。"}]
+14:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"Phase 5: Implementation"}]," —— 需要用户明确批准才开始。写代码时严格遵循 Phase 2 发现的代码风格和 Phase 4 选定的架构。"]}]
+15:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"Phase 6: Quality Review"}]," —— 并行启动 3 个 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"code-reviewer"}]," subagent："]}]
+16:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"简洁性/DRY/可读性"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"bug/逻辑正确性"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"项目规范/抽象一致性"}],"\n"]}]
+17:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"每个 reviewer 对发现的问题标注置信度（0-100），只报告置信度 80 以上的。这个阈值设定是为了减少误报——误报太多会让人烦了直接忽略。"}]
+18:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"Phase 7: Summary"}]," —— 输出完成报告：做了什么、关键决策、修改了哪些文件、下一步建议。"]}]
+19:["$","h3",null,{"id":"agent-设计","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["Agent 设计",["$","$La",null,{"id":"agent-设计"}]]}]
+1a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"三个 agent 的共同特点："}]
+1b:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"都用 sonnet 模型，不用 opus——在 subagent 场景下 sonnet 的性价比更高"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":["都有 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"color"}]," 字段（yellow、green、red），终端里能直观区分"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":["tools 列表中有 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"BashOutput"}],"（Bash 工具的只读输出变体）和 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"KillShell"}],"（终止挂起的 shell 进程），但没有 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"Write"}]," 和 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"Edit"}],"——explorer 和 reviewer 是只读的"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"code-architect 也没有写权限，它只输出设计蓝图，不动代码"}],"\n"]}]
+1c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["code-reviewer 的 description 里明确写了”review unstaged changes from ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"git diff"}],"”——默认审查未提交的变更，不是整个代码库。"]}]
+1d:["$","h2",null,{"id":"安装与配置","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["安装与配置",["$","$La",null,{"id":"安装与配置"}]]}]
+1e:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L32",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"/plugin"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" install"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" feature-dev@claude-plugins-official"}]]}]}]]}]]}]
+1f:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"无额外依赖。需要在 git 仓库里使用（Phase 6 依赖 git diff）。"}]
+20:["$","h2",null,{"id":"使用方法","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["使用方法",["$","$La",null,{"id":"使用方法"}]]}]
+21:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L32",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":["$","span",null,{"children":"/feature-dev 给 API 端点加上速率限制"}]}]}]]}]]}]
+22:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"或者不带参数："}]
+23:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L32",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":["$","span",null,{"children":"/feature-dev"}]}]}]]}]]}]
+24:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Claude 会问你想做什么。"}]
+25:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"也可以单独调用 agent，不走完整流程："}]
+26:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L32",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":["$","span",null,{"children":"启动 code-explorer 看一下认证模块是怎么实现的"}]}]}]]}]]}]
+27:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$Lb",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L32",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":["$","span",null,{"children":"启动 code-reviewer 检查我刚写的代码"}]}]}]]}]]}]
+28:["$","h2",null,{"id":"使用场景","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["使用场景",["$","$La",null,{"id":"使用场景"}]]}]
+29:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"中大型功能开发"}],"。涉及多个文件、需要架构决策的功能。比如”给现有系统加 OAuth 登录”——需要先理解现有的认证机制、会话管理、路由结构，再决定怎么集成。这正是 Phase 2 和 Phase 4 发力的地方。"]}]
+2a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"不熟悉的代码库里做开发"}],"。接手一个不了解的项目要加功能，Phase 2 的代码探索能帮你快速建立对项目的理解。三个 explorer 并行跑，各自追踪不同维度，比自己一个文件一个文件读高效得多。"]}]
+2b:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"需要多种方案对比的场景"}],"。Phase 4 的多架构方案设计在做技术决策时很有用。“最小改动”方案能看到 quick fix 的样子，“清晰架构”方案能看到理想重构的样子，“务实平衡”方案居中。各自的 trade-off 摆出来，选起来有谱。"]}]
+2c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"单独用 code-reviewer 做代码审查"}],"。不走完整流程，只在写完代码后启动 code-reviewer。它会读 CLAUDE.md 里的项目规范，对照检查代码。置信度过滤保证了报出来的问题多数是真问题。"]}]
+2d:["$","h2",null,{"id":"局限与注意事项","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["局限与注意事项",["$","$La",null,{"id":"局限与注意事项"}]]}]
+2e:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"完整七阶段流程很耗时间和 token。简单的 bug 修复或者改个配置文件，不要用这个插件，直接做就行"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"Phase 2 的 subagent 探索在大代码库上可能跑很久。官方说法是”this is normal for large codebases”，但如果你的项目有几万个文件，等待时间会比较可观"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"Phase 3 问的问题有时候太多。如果你对需求很明确，可以说”你觉得合理就行”来跳过，但 Claude 会给出它的建议再让你确认，不会完全跳过"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"Phase 4 生成的架构方案质量取决于 Phase 2 的代码探索结果。如果 explorer 没找到相关的代码，architect 设计的方案可能脱离项目实际"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"三个 agent 都不能执行写操作。所有代码修改都由主会话的 Claude 完成，subagent 只负责分析和审查"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":["命令里用了 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"TodoWrite"}]," 跟踪进度。如果你的 Claude Code 环境不支持 TodoWrite 工具，部分流程会有差异"]}],"\n"]}]
+31:null

@@ -1,0 +1,102 @@
+1:"$Sreact.fragment"
+2:I[55169,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"TOCProvider"]
+3:I[769,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"Sidebar"]
+4:I[47486,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ClientWrapper"]
+22:I[63894,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"HeadingAnchor"]
+23:I[83987,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ToggleWordWrapButton"]
+24:I[40493,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"CopyToClipboard"]
+25:I[97367,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"OutletBoundary"]
+26:"$Sreact.suspense"
+5:T9d5,# 6.16 Fakechat
+
+## 定位
+
+本地 Web 聊天界面，用于测试 Claude Code 的 channel 机制。不连接任何外部服务，打开浏览器就能用。这是一个开发调试工具，不是正式的消息通道。
+
+## 核心功能
+
+本地 stdio 类型 MCP 服务器，Bun 运行。启动后在 `localhost:8787` 提供一个极简的 iMessage 风格聊天页面。
+
+**暴露给 Claude 的工具：**
+
+| 工具 | 用途 |
+| --- | --- |
+| `reply` | 发送消息到浏览器 UI。支持 `reply_to` 引用和 `files` 附件（单文件 50MB 限制）。 |
+| `edit_message` | 编辑之前发送的消息。 |
+
+**它怎么工作的：**
+
+浏览器通过 WebSocket 连到 localhost 服务器。你在网页上打字，服务器通过 MCP 的 channel notification 把消息传给 Claude。Claude 调用 `reply` 工具，消息通过 WebSocket 推回浏览器。
+
+文件上传走 HTTP POST `/upload`，保存到 `~/.claude/channels/fakechat/inbox/`。回复里的附件拷到 `outbox/` 并通过 HTTP 提供下载。
+
+## 安装与配置
+
+```
+/plugin install fakechat@claude-plugins-official
+```
+
+以 channel 模式启动：
+
+```bash
+claude --channels plugin:fakechat@claude-plugins-official
+```
+
+启动后 stderr 会输出：
+
+```
+fakechat: http://localhost:8787
+```
+
+打开这个地址就行了。改端口用环境变量 `FAKECHAT_PORT`。
+
+不需要 token，不需要注册，没有访问控制。
+
+## 典型使用场景
+
+**场景一：channel 插件开发测试**
+
+你在开发自己的 channel 插件，想验证 channel notification、reply 工具、文件上传下载这些机制是否正常。fakechat 是最快的验证手段——不用去建 Discord bot 或 Telegram bot。
+
+**场景二：演示 channel 功能**
+
+给同事演示 Claude Code 的 channel 能力时，fakechat 零配置就能跑起来，比折腾真实平台方便。
+
+**场景三：文件交互测试**
+
+测试附件上传和下载流程。网页上点"attach"选文件，看 Claude 能不能正确接收和处理。
+
+## 注意事项
+
+- 这不是正式的消息通道。没有消息历史、没有搜索、没有 access.json、没有 skill。刷新页面一切清空。
+- 单浏览器 tab 设计。开第二个 tab 不会同步消息（WebSocket 连接各自独立，但 deliver 会 broadcast 到所有 tab）。
+- 只绑定 `127.0.0.1`，局域网内其他机器访问不了。这是刻意的——毕竟没有任何认证。
+- HTML/JS 直接内嵌在 `server.ts` 里，一共不到 300 行代码。如果想改 UI 样式，直接改源码。6:T4d6,{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://inferloop.dev/claude-plugins/external-services/fakechat#article","headline":"6.16 Fakechat","description":"本地 Web 聊天界面，用于测试 Claude Code 的 channel 机制。不连接任何外部服务，打开浏览器就能用。这是一个开发调试工具，不是正式的消息通道。","inLanguage":"zh-CN","author":{"@type":"Person","name":"递归客"},"publisher":{"@type":"Organization","name":"InferLoop","url":"https://inferloop.dev"},"isPartOf":{"@type":"Book","name":"Claude 插件官方指南","url":"https://inferloop.dev/claude-plugins","image":"https://images.redream.cn/images/XwX564.png"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://inferloop.dev/claude-plugins/external-services/fakechat"},"image":"https://images.redream.cn/images/XwX564.png"},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"首页","item":"https://inferloop.dev"},{"@type":"ListItem","position":2,"name":"Claude 插件官方指南","item":"https://inferloop.dev/claude-plugins"},{"@type":"ListItem","position":3,"name":"6.16 Fakechat","item":"https://inferloop.dev/claude-plugins/external-services/fakechat"}]}]}0:{"rsc":["$","$1","c",{"children":[["$","div",null,{"className":"x:mx-auto x:flex x:max-w-(--nextra-content-width)","children":["$","$L2",null,{"value":[{"value":"定位","id":"定位","depth":2},{"value":"核心功能","id":"核心功能","depth":2},{"value":"安装与配置","id":"安装与配置","depth":2},{"value":"典型使用场景","id":"典型使用场景","depth":2},{"value":"注意事项","id":"注意事项","depth":2}],"children":[["$","$L3",null,{}],["$","$L4",null,{"metadata":{"title":"6.16 Fakechat","filePath":"content/claude-plugins/external-services/fakechat.md","timestamp":1778089813000},"sourceCode":"$5","children":[["$","div",null,{"id":"nextra-skip-nav"}],["$","main",null,{"data-pagefind-body":true,"children":[["$","script",null,{"type":"application/ld+json","dangerouslySetInnerHTML":{"__html":"$6"}}],[["$","h1",null,{"className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-bold x:mt-2 x:text-4xl","children":["6.16 Fakechat","$undefined"]}],"\n",["$","h2",null,{"id":"定位","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["定位","$L7"]}],"\n","$L8","\n","$L9","\n","$La","\n","$Lb","\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n","$Lc","\n","$Ld","\n","$Le","\n","$Lf","\n","$L10","\n","$L11","\n","$L12","\n","$L13","\n","$L14","\n","$L15","\n","$L16","\n","$L17","\n","$L18","\n","$L19","\n","$L1a","\n","$L1b","\n","$L1c","\n","$L1d","\n","$L1e","\n","$L1f","\n","$L20"]]}]]}]]}]}],null,"$L21"]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"CR_c9URqh-5K47K_DC-c1"}
+7:["$","$L22",null,{"id":"定位"}]
+8:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"本地 Web 聊天界面，用于测试 Claude Code 的 channel 机制。不连接任何外部服务，打开浏览器就能用。这是一个开发调试工具，不是正式的消息通道。"}]
+9:["$","h2",null,{"id":"核心功能","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["核心功能",["$","$L22",null,{"id":"核心功能"}]]}]
+a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["本地 stdio 类型 MCP 服务器，Bun 运行。启动后在 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"localhost:8787"}]," 提供一个极简的 iMessage 风格聊天页面。"]}]
+b:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"暴露给 Claude 的工具："}]}]
+c:["$","table",null,{"className":"x:block x:overflow-x-auto nextra-scrollbar x:not-first:mt-[1.25em] x:p-0","children":[["$","thead",null,{"children":["$","tr",null,{"children":[["$","th",null,{"children":"工具","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"用途","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]}],["$","tbody",null,{"children":[["$","tr",null,{"children":[["$","td",null,{"children":["$","code",null,{"className":"nextra-code","dir":"ltr","children":"reply"}],"className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":["发送消息到浏览器 UI。支持 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"reply_to"}]," 引用和 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"files"}]," 附件（单文件 50MB 限制）。"],"className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":["$","code",null,{"className":"nextra-code","dir":"ltr","children":"edit_message"}],"className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"编辑之前发送的消息。","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]]}]]}]
+d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"它怎么工作的："}]}]
+e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["浏览器通过 WebSocket 连到 localhost 服务器。你在网页上打字，服务器通过 MCP 的 channel notification 把消息传给 Claude。Claude 调用 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"reply"}]," 工具，消息通过 WebSocket 推回浏览器。"]}]
+f:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["文件上传走 HTTP POST ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"/upload"}],"，保存到 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"~/.claude/channels/fakechat/inbox/"}],"。回复里的附件拷到 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"outbox/"}]," 并通过 HTTP 提供下载。"]}]
+10:["$","h2",null,{"id":"安装与配置","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["安装与配置",["$","$L22",null,{"id":"安装与配置"}]]}]
+11:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L23",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L24",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":["$","span",null,{"children":"/plugin install fakechat@claude-plugins-official"}]}]}]]}]]}]
+12:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"以 channel 模式启动："}]
+13:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L23",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L24",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"claude"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" --channels"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" plugin:fakechat@claude-plugins-official"}]]}]}]]}]]}]
+14:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"启动后 stderr 会输出："}]
+15:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L23",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L24",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":["$","span",null,{"children":"fakechat: http://localhost:8787"}]}]}]]}]]}]
+16:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["打开这个地址就行了。改端口用环境变量 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"FAKECHAT_PORT"}],"。"]}]
+17:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"不需要 token，不需要注册，没有访问控制。"}]
+18:["$","h2",null,{"id":"典型使用场景","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["典型使用场景",["$","$L22",null,{"id":"典型使用场景"}]]}]
+19:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"场景一：channel 插件开发测试"}]}]
+1a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"你在开发自己的 channel 插件，想验证 channel notification、reply 工具、文件上传下载这些机制是否正常。fakechat 是最快的验证手段——不用去建 Discord bot 或 Telegram bot。"}]
+1b:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"场景二：演示 channel 功能"}]}]
+1c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"给同事演示 Claude Code 的 channel 能力时，fakechat 零配置就能跑起来，比折腾真实平台方便。"}]
+1d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"场景三：文件交互测试"}]}]
+1e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"测试附件上传和下载流程。网页上点”attach”选文件，看 Claude 能不能正确接收和处理。"}]
+1f:["$","h2",null,{"id":"注意事项","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["注意事项",["$","$L22",null,{"id":"注意事项"}]]}]
+20:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"这不是正式的消息通道。没有消息历史、没有搜索、没有 access.json、没有 skill。刷新页面一切清空。"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"单浏览器 tab 设计。开第二个 tab 不会同步消息（WebSocket 连接各自独立，但 deliver 会 broadcast 到所有 tab）。"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":["只绑定 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"127.0.0.1"}],"，局域网内其他机器访问不了。这是刻意的——毕竟没有任何认证。"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":["HTML/JS 直接内嵌在 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"server.ts"}]," 里，一共不到 300 行代码。如果想改 UI 样式，直接改源码。"]}],"\n"]}]
+21:["$","$L25",null,{"children":["$","$26",null,{"name":"Next.MetadataOutlet","children":"$@27"}]}]
+27:null

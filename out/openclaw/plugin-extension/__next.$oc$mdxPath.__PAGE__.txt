@@ -1,0 +1,656 @@
+1:"$Sreact.fragment"
+2:I[55169,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"TOCProvider"]
+3:I[769,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"Sidebar"]
+4:I[47486,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ClientWrapper"]
+a:I[63894,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"HeadingAnchor"]
+7c:I[97367,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"OutletBoundary"]
+7d:"$Sreact.suspense"
+7f:I[83987,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ToggleWordWrapButton"]
+80:I[40493,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"CopyToClipboard"]
+88:I[90232,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"Mermaid"]
+5:T572d,# 第 26 章 — Plugin 与 Extension 开发：扩展 Gateway 能力
+
+读完这章你能学到：OpenClaw 插件系统的完整架构，包括两种插件风格的设计哲学、Plugin SDK 的模块划分、生命周期钩子的执行时序，以及 jiti 运行时加载机制的实现细节。
+
+## 26.1 两种插件风格
+
+OpenClaw 的 VISION.md 明确定义了两种插件风格：
+
+> There are two broad plugin styles:
+> - Code plugins run OpenClaw plugin code and are appropriate for deeper runtime extension.
+> - Bundle-style plugins package stable external surfaces such as skills, MCP servers, and related configuration.
+
+这不是随意的分类，而是沿着"运行时权限"这条轴线做出的设计切分。
+
+### Code Plugins：进程内扩展
+
+Code plugins 在 Gateway 进程内执行，可以注册 providers、channels、hooks、tools、services 等能力。它们通过 `register(api)` 回调获得一个 `OpenClawPluginApi` 对象，进而操作 Gateway 的运行时注册表。
+
+一个最小的 Code plugin 长这样（引自 `docs/plugins/building-plugins.md`）：
+
+```typescript
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+
+export default definePluginEntry({
+  id: "my-plugin",
+  name: "My Plugin",
+  description: "Adds a custom tool to OpenClaw",
+  register(api) {
+    api.registerTool({
+      name: "my_tool",
+      description: "Does something useful",
+      parameters: { type: "object", properties: {} },
+      execute: async (params) => {
+        return { result: "done" };
+      },
+    });
+  },
+});
+```
+
+Code plugin 的权限边界是进程级的——它和 Gateway 共享内存空间，可以注册 HTTP 路由、Gateway RPC 方法、后台服务，甚至替换 Agent 的执行引擎。
+
+### Bundle-style Plugins：声明式扩展
+
+Bundle plugins 不执行代码，而是打包稳定的外部资源：Skills 文件、MCP Server 配置、Agent 指令等。它们兼容 Codex/Claude/Cursor 的插件目录布局（`.codex-plugin/`、`.claude-plugin/`、`.cursor-plugin/`），通过 manifest 映射到 OpenClaw 的功能。
+
+Bundle plugins 的安全边界更好——它们只提供数据，不注入运行时行为。VISION.md 中的指导原则是：
+
+> Prefer bundle-style plugins when they can express the capability. They have a smaller, more stable interface and better security boundaries.
+
+### 风格选择的决策树
+
+```mermaid
+graph TD
+    A[需要扩展 OpenClaw 能力?] -->|是| B{需要运行时钩子?<br/>自定义 Provider?<br/>Channel 集成?}
+    B -->|是| C[Code Plugin<br/>definePluginEntry]
+    B -->|否| D{需要 Skills?<br/>MCP Server?<br/>配置模板?}
+    D -->|是| E[Bundle Plugin<br/>目录结构 + manifest]
+    D -->|否| F[可能不需要插件<br/>检查内置功能]
+```
+
+## 26.2 Plugin SDK 的模块划分
+
+Plugin SDK 位于 `src/plugin-sdk/`，是插件与核心之间的类型化契约。SDK 按职责分为多个子路径，每个子路径是一个独立的 ESM 模块。
+
+### SDK 架构总览
+
+```mermaid
+graph TB
+    subgraph "Plugin SDK 子路径"
+        PE[plugin-entry<br/>插件入口定义] --> CORE[core<br/>综合导出表面]
+        CC[channel-core<br/>Channel 插件入口] --> CORE
+        PRE[provider-entry<br/>Provider 快捷入口] --> PE
+        GR[gateway-runtime<br/>Gateway 客户端/RPC] --> CORE
+        AH[agent-harness<br/>Agent 执行引擎替换] --> CORE
+        MC[memory-core-host-*<br/>Memory 插件运行时] --> CORE
+        PR[process-runtime<br/>子进程工具] --> CORE
+    end
+
+    subgraph "插件代码"
+        P1[Provider Plugin] -->|import| PRE
+        P2[Channel Plugin] -->|import| CC
+        P3[Tool Plugin] -->|import| PE
+        P4[Memory Plugin] -->|import| MC
+    end
+
+    subgraph "Gateway Core"
+        LOADER[src/plugins/loader.ts<br/>插件加载器] -->|调用| PE
+        REG[src/plugins/registry.ts<br/>注册表] -->|消费| CORE
+    end
+```
+
+### 各模块详解
+
+**plugin-entry（`src/plugin-sdk/plugin-entry.ts`）**
+
+插件入口的规范定义。`definePluginEntry` 函数接受 `id`、`name`、`description`、`register` 等字段，返回一个标准化的插件定义对象。核心实现只有 20 行（`src/plugin-sdk/plugin-entry.ts:254-279`）：
+
+```typescript
+export function definePluginEntry({
+  id, name, description, kind,
+  configSchema = emptyPluginConfigSchema,
+  reload, nodeHostCommands, securityAuditCollectors, register,
+}: DefinePluginEntryOptions): DefinedPluginEntry {
+  const getConfigSchema = createCachedLazyValueGetter(configSchema);
+  return {
+    id, name, description,
+    ...(kind ? { kind } : {}),
+    ...(reload ? { reload } : {}),
+    ...(nodeHostCommands ? { nodeHostCommands } : {}),
+    ...(securityAuditCollectors ? { securityAuditCollectors } : {}),
+    get configSchema() {
+      return getConfigSchema();
+    },
+    register,
+  };
+}
+```
+
+`configSchema` 支持传入一个工厂函数，通过 `createCachedLazyValueGetter` 实现延迟求值并缓存——这对包含大量校验规则的 Provider 插件来说，避免了不必要的 schema 解析开销。
+
+**channel-core（`src/plugin-sdk/channel-core.ts`）**
+
+Channel 插件的入口。`defineChannelPluginEntry` 是对 `definePluginEntry` 的封装，自动调用 `api.registerChannel({ plugin })` 并支持分阶段注册（`src/plugin-sdk/channel-core.ts:11-29`）：
+
+```typescript
+export const createChannelPluginBase = (params) =>
+  createChannelPluginBaseFromCore(params);
+
+export {
+  buildChannelConfigSchema,
+  buildChannelOutboundSessionRoute,
+  buildThreadAwareOutboundSessionRoute,
+  defineChannelPluginEntry,
+  defineSetupPluginEntry,
+  // ...
+} from "./core.js";
+```
+
+Channel 插件有两个注册阶段：`registerCliMetadata`（CLI 元数据，非激活式）和 `registerFull`（完整运行时，仅在 `registrationMode === "full"` 时执行）。这个分阶段设计确保了 CLI help 和 discovery 快照可以在不加载完整插件运行时的情况下工作。
+
+**provider-entry（`src/plugin-sdk/provider-entry.ts`）**
+
+Provider 插件的快捷入口。封装了 `definePluginEntry` + `api.registerProvider(...)` + API Key 认证方法 + 模型目录的标准化流程（`src/plugin-sdk/provider-entry.ts:1-64`）：
+
+```typescript
+export type SingleProviderPluginOptions = {
+  id: string;
+  name: string;
+  description: string;
+  provider?: {
+    id?: string;
+    label: string;
+    docsPath: string;
+    auth?: SingleProviderPluginApiKeyAuthOptions[];
+    catalog: SingleProviderPluginCatalogOptions;
+  };
+  register?: (api: OpenClawPluginApi) => void;
+};
+```
+
+大多数 Provider 插件只需填写这个结构体，不用手动处理认证流程和模型发现逻辑。
+
+**gateway-runtime（`src/plugin-sdk/gateway-runtime.ts`）**
+
+暴露 Gateway 客户端和 RPC 工具给需要与 Gateway 交互的插件。主要导出 `GatewayClient`、协议相关的 `ErrorCodes`、`errorShape`，以及 `resolveGatewayAuth` 等鉴权工具（`src/plugin-sdk/gateway-runtime.ts:1-27`）：
+
+```typescript
+export { GatewayClient } from "../gateway/client.js";
+export { ErrorCodes, errorShape } from "../gateway/protocol/index.js";
+export { ensureGatewayStartupAuth } from "../gateway/startup-auth.js";
+export { resolveGatewayAuth } from "../gateway/auth.js";
+```
+
+**agent-harness（`src/plugin-sdk/agent-harness.ts`）**
+
+实验性接口，允许插件替换 OpenClaw 默认的 Agent 执行引擎。整个模块只有两行导出（`src/plugin-sdk/agent-harness.ts:3-5`）：
+
+```typescript
+export * from "./agent-harness-runtime.js";
+export { createOpenClawCodingTools } from "../agents/pi-tools.js";
+```
+
+Agent harness 插件可以接管整个 Agent 循环——从接收用户消息到产生回复的完整过程。这是插件系统中权限最大的扩展点。
+
+**memory-core-host-runtime-core**
+
+Memory 插件的运行时核心，导出内存引擎的注册、查询、嵌入等接口。Memory 是一个独占插槽——同一时刻只能有一个 memory 插件处于活跃状态（`VISION.md:75-76`）：
+
+> Memory is a special plugin slot where only one memory plugin can be active at a time.
+
+**process-runtime（`src/plugin-sdk/process-runtime.ts`）**
+
+给需要启动子进程的插件用的工具集，导出 `exec` 等进程管理工具和 Linux OOM score 调整能力。
+
+### SDK 子路径的设计原则
+
+SDK 的边界规范记录在 `src/plugin-sdk/CLAUDE.md` 中，核心原则有三条：
+
+1. **宿主加载插件，插件不穿透 SDK 到宿主内部。** 插件通过 SDK 子路径获得能力，不能直接 import `src/agents/**`、`src/channels/**` 等核心模块。
+2. **窄子路径优于宽桶导出。** 每个子路径只解决一个能力需求，避免 `import * from "openclaw/plugin-sdk"` 这种拉进整个 SDK 的做法。
+3. **SDK 入口在模块加载时必须轻量。** 如果某个 helper 只在异步路径（发送、监控、探测）上需要，放到专门的 `*.runtime` 子路径，不要通过热路径的 barrel 导出。
+
+## 26.3 Plugin 生命周期钩子
+
+插件通过 `api.on(hookName, handler, opts?)` 注册生命周期钩子。钩子按优先级降序执行，同优先级保持注册顺序。
+
+### 钩子执行时序
+
+一次完整的 Gateway 启动到响应消息的钩子触发顺序：
+
+```mermaid
+sequenceDiagram
+    participant G as Gateway
+    participant P as Plugin Hooks
+    participant A as Agent Runtime
+
+    Note over G: Gateway 启动
+    G->>P: gateway_start
+
+    Note over G: 收到用户消息
+    G->>P: inbound_claim（可拦截）
+    G->>P: message_received（观察）
+
+    Note over A: Agent 处理
+    A->>P: before_model_resolve（可覆盖 provider/model）
+    A->>P: agent_turn_prepare（注入上下文）
+    A->>P: before_prompt_build（修改 system prompt）
+    A->>P: before_agent_reply（可短路）
+    A->>P: model_call_started（观察）
+    A->>P: llm_input（观察）
+
+    Note over A: 工具调用
+    A->>P: before_tool_call（可拦截/重写/要求审批）
+    A->>P: after_tool_call（观察）
+    A->>P: tool_result_persist（可重写）
+
+    Note over A: Agent 完成
+    A->>P: llm_output（观察）
+    A->>P: model_call_ended（观察）
+    A->>P: before_agent_finalize（可请求再跑一轮）
+    A->>P: agent_end（观察）
+
+    Note over G: 发送回复
+    G->>P: message_sending（可重写/取消）
+    G->>P: before_dispatch（可重写）
+    G->>P: reply_dispatch（参与分发）
+    G->>P: message_sent（观察）
+
+    Note over G: Gateway 关闭
+    G->>P: gateway_stop
+```
+
+### 钩子分类
+
+钩子分为两类：**决策型**和**观察型**。
+
+**决策型钩子**可以改变执行流程——拦截、重写、要求审批或取消操作。源码中定义了完整的决策型钩子列表（`src/plugins/hook-types.ts:70-105`）：
+
+```typescript
+export type PluginHookName =
+  | "before_model_resolve"      // 覆盖 provider/model
+  | "before_agent_reply"        // 短路回复
+  | "before_agent_finalize"     // 请求额外的模型调用
+  | "before_tool_call"          // 拦截/重写/审批
+  | "tool_result_persist"       // 重写工具结果
+  | "before_message_write"      // 拦截消息写入
+  | "inbound_claim"             // 拦截入站消息
+  | "message_sending"           // 重写/取消出站消息
+  | "before_dispatch"           // 重写分发
+  | "reply_dispatch"            // 参与分发管道
+  | "before_install"            // 拦截安装
+  // ...观察型钩子省略
+```
+
+**观察型钩子**只接收事件通知，不能改变执行流程：`message_received`、`message_sent`、`model_call_started`/`ended`、`llm_input`/`output`、`agent_end`、`session_start`/`end` 等。
+
+### before_tool_call 的审批机制
+
+`before_tool_call` 是插件系统中最有实战价值的钩子之一。它的返回类型展示了精细的控制粒度（`docs/plugins/hooks.md:129-144`）：
+
+```typescript
+type BeforeToolCallResult = {
+  params?: Record<string, unknown>;   // 重写工具参数
+  block?: boolean;                     // 直接拦截
+  blockReason?: string;                // 拦截原因
+  requireApproval?: {                  // 要求人工审批
+    title: string;
+    description: string;
+    severity?: "info" | "warning" | "critical";
+    timeoutMs?: number;
+    timeoutBehavior?: "allow" | "deny";
+  };
+};
+```
+
+`block: true` 是终结性的——跳过所有低优先级的 handler。`requireApproval` 会暂停工具执行，等待操作者通过 Control UI 或其他审批通道做出决定。
+
+### before_agent_start 的兼容性定位
+
+`before_agent_start` 是最早的插件钩子，也是目前标记为 legacy 的钩子。它把模型选择和 prompt 修改混在一起。新的架构将它拆分为两个独立关注点（`docs/plugins/architecture.md:91-99`）：
+
+- `before_model_resolve`：处理 model/provider 覆盖
+- `before_prompt_build`：处理 prompt 修改
+
+`before_agent_start` 仍然完全支持——真实世界的外部插件依赖它。但新插件应该使用拆分后的钩子。
+
+## 26.4 Extension 的加载机制
+
+### jiti 运行时加载
+
+OpenClaw 使用 [jiti](https://github.com/unjs/jiti) 在运行时加载 TypeScript 插件源码。jiti 是一个运行时 TypeScript/ESM 转换器，让 `.ts` 文件可以直接被 Node.js import，无需预编译。
+
+加载器的核心在 `src/plugins/jiti-loader-cache.ts`（`src/plugins/jiti-loader-cache.ts:1-60`）：
+
+```typescript
+import { createJiti } from "jiti";
+
+export function getCachedPluginJitiLoader(params: {
+  cache: PluginJitiLoaderCache;
+  modulePath: string;
+  importerUrl: string;
+  preferBuiltDist?: boolean;
+  pluginSdkResolution?: PluginSdkResolutionPreference;
+  cacheScopeKey?: string;
+}): PluginJitiLoader {
+  // 按 jitiFilename + cacheScopeKey 缓存 loader 实例
+  const jitiFilename = toSafeImportPath(params.jitiFilename ?? params.modulePath);
+  // ...缓存逻辑
+}
+```
+
+关键设计：每个插件的加载路径对应一个缓存的 jiti 实例，避免重复创建。jiti 实例的配置包括 SDK 别名映射（让 `openclaw/plugin-sdk/*` 解析到正确路径）和原生模块加载策略。
+
+当插件提供了编译后的 `.js` 文件时（通过 `package.json` 中的 `runtimeExtensions` 字段），加载器优先使用编译产物，跳过运行时转译。这是 npm 发布的插件推荐的做法——源码入口供开发时用，编译入口供生产用。
+
+### 四阶段加载流水线
+
+插件加载不是一次性完成的，而是分四个阶段（`docs/plugins/architecture.md:118-131`）：
+
+```mermaid
+graph LR
+    A[1. Manifest + Discovery<br/>发现候选插件] --> B[2. Enablement + Validation<br/>启用/禁用/阻止]
+    B --> C[3. Runtime Loading<br/>jiti 加载 + 注册]
+    C --> D[4. Surface Consumption<br/>注册表消费]
+```
+
+**阶段 1：发现。** 从配置路径、workspace 根目录、全局插件目录、bundled 插件中搜索候选插件。读取 `openclaw.plugin.json` manifest。这个阶段不执行任何插件代码。
+
+**阶段 2：验证。** 根据配置决定每个候选插件的状态：enabled（启用）、disabled（禁用）、blocked（被 `plugins.deny` 阻止）、或被选入独占插槽（如 memory）。验证基于 manifest 元数据完成，不需要执行插件代码。
+
+**阶段 3：运行时加载。** 通过 jiti 加载插件的 entry 模块，调用 `register(api)` 回调，将能力注册到中央注册表。Bundle 插件在这个阶段被归一化为注册表记录，不导入运行时代码。
+
+**阶段 4：消费。** Gateway 的其他模块从注册表读取已注册的 tools、channels、providers、hooks、HTTP routes、CLI commands 和 services。
+
+这个分阶段设计的核心意图是：让配置验证、UI 提示、schema 生成等"冷路径"操作可以在完整运行时启动之前完成。用 CLAUDE.md 的话说（`src/plugins/CLAUDE.md`）：
+
+> manifest/config validation should work from manifest/schema metadata without executing plugin code
+
+### registrationMode 的三种模式
+
+`register(api)` 回调中的 `api.registrationMode` 有三种值：
+
+| 模式 | 触发场景 | 允许的操作 |
+|------|---------|-----------|
+| `"full"` | Gateway 正常启动 | 所有注册操作 |
+| `"cli-metadata"` | CLI help / 命令发现 | 仅 `registerCli` |
+| `"discovery"` | 非激活式快照构建 | 静态元数据注册 |
+
+Channel 插件利用这个机制实现懒加载：在 `"cli-metadata"` 和 `"discovery"` 模式下只注册 CLI 描述符，在 `"full"` 模式下才建立网络连接和注册完整运行时。
+
+## 26.5 核心与扩展的边界原则
+
+OpenClaw 的架构指南用一句话概括了边界原则（`AGENTS.md`）：
+
+> Core stays extension-agnostic. No bundled ids in core when manifest/registry/capability contracts work.
+
+这条规则在代码中的体现无处不在。
+
+### 边界的实施方式
+
+**扩展只能通过 SDK 跨入核心。** 插件不能直接 import `src/agents/**`、`src/channels/**`、`src/plugins/**` 等核心模块，只能通过 `openclaw/plugin-sdk/*` 子路径获取能力。在运行时，加载器通过 jiti 的别名映射强制执行这个约束。
+
+**核心不知道具体扩展的存在。** 核心代码中不会出现 `if (pluginId === "telegram")` 这样的硬编码。Provider 认证、Channel 路由、工具注册都通过通用契约完成——manifest metadata、capability registration、injected runtime helpers。
+
+**独占插槽用声明式元数据，不用运行时检测。** Memory 插件是独占插槽的典型例子：通过 `kind: "memory"` 声明，由配置系统（不是运行时代码）决定哪个 memory 插件生效。
+
+### extensionAPI.ts 的兼容桥
+
+`src/extensionAPI.ts` 是一个有趣的历史遗留（`src/extensionAPI.ts:1-33`）：
+
+```typescript
+if (shouldWarnExtensionApiImport) {
+  process.emitWarning(
+    "openclaw/extension-api is deprecated. Migrate to api.runtime.agent.* " +
+    "or focused openclaw/plugin-sdk/<subpath> imports.",
+    {
+      code: "OPENCLAW_EXTENSION_API_DEPRECATED",
+      detail: "This compatibility bridge is temporary.",
+    },
+  );
+}
+```
+
+这个文件是旧插件 API 到新 Plugin SDK 的兼容桥。它只重新导出了少量基础工具（`resolveAgentDir`、`DEFAULT_MODEL`、`resolveAgentIdentity` 等），并在非测试环境下打印弃用警告。新插件应该直接使用 `openclaw/plugin-sdk/<subpath>` 的窄导入。
+
+### 插件配置的信任边界
+
+插件系统在配置层也有明确的信任分级。从源码中的 `PluginHookName` 类型和文档可以提炼出三级信任模型：
+
+```mermaid
+graph TB
+    subgraph "Bundled Only（仅内置插件）"
+        T1[Trusted Tool Policy<br/>before_tool_call 之前执行]
+        T2[Reserved Command Ownership<br/>核心命令保留]
+    end
+
+    subgraph "Full Trust（所有已安装插件）"
+        T3[Session Extensions]
+        T4[UI Descriptors]
+        T5[Commands]
+        T6[Tool Metadata]
+        T7[Normal Hooks]
+    end
+
+    subgraph "Restricted（受限能力）"
+        T8[allowPromptInjection=false<br/>禁用 prompt 修改类钩子]
+    end
+```
+
+Trusted Tool Policy 在普通的 `before_tool_call` 钩子之前执行，参与宿主安全策略——这个能力只开放给 bundled（内置）插件，第三方插件无法注册。
+
+## 26.6 插件的发现与分发
+
+### ClawHub：官方插件市场
+
+插件的发现、官方发布者认证、来源追溯和安全审查由 [ClawHub](https://clawhub.ai/) 负责。安装时 OpenClaw 优先查询 ClawHub，找不到再回退到 npm：
+
+```bash
+# ClawHub 优先，自动回退 npm
+openclaw plugins install @openclaw/voice-call
+
+# 显式指定来源
+openclaw plugins install clawhub:@openclaw/voice-call
+openclaw plugins install npm:my-custom-plugin
+```
+
+### 插件的形态分类
+
+Gateway 在运行时将每个已加载的插件分类为一种"shape"（`docs/plugins/architecture.md:69-85`）：
+
+| Shape | 含义 | 判定依据 |
+|-------|------|---------|
+| `plain-capability` | 注册了单一能力类型 | 如只注册 Provider 的 `mistral` |
+| `hybrid-capability` | 注册了多种能力类型 | 如同时注册 text inference + speech + image 的 `openai` |
+| `hook-only` | 只注册了钩子 | 无 capability、tool、command、service |
+| `non-capability` | 注册了 tool/command/service 但无 capability | 辅助工具类插件 |
+
+用 `openclaw plugins inspect <id>` 可以查看任何插件的 shape 和能力明细。
+
+## 26.7 本章小结
+
+OpenClaw 的插件系统沿着三条设计轴线展开：
+
+**权限轴线**——Code plugins 拥有进程内的完整能力，Bundle plugins 只提供声明式数据。选择哪种风格取决于你需要多深的运行时控制。
+
+**生命周期轴线**——从 `gateway_start` 到 `gateway_stop`，覆盖 Agent turn、工具调用、消息分发、会话管理的完整链路。30 个钩子点分为决策型和观察型，开发者根据需要选择粒度。
+
+**边界轴线**——核心与扩展通过 Plugin SDK 的窄子路径交互，核心不知道具体扩展的存在，扩展不穿透 SDK 到核心内部。这条规则由 jiti 加载器的别名映射在运行时强制执行。
+
+理解了这三条轴线，就掌握了开发 OpenClaw 插件的设计框架。下一章将进入 OpenClaw 的生态体系，看看围绕这个插件系统已经生长出了什么。
+
+## 练习
+
+**思考题**
+
+1. Plugin SDK 有 30 个生命周期钩子，分为决策型（能修改行为）和观察型（只读）。如果一个插件在 `before_tool_call` 钩子中执行了一个耗时的网络请求（比如向外部审批系统发送请求），这会阻塞整个工具调用链。你认为应该给钩子设置超时限制吗？超时后应该默认放行还是默认拒绝？两种选择各自的风险是什么？
+
+2. 核心与扩展的边界由 jiti 加载器的别名映射在运行时强制执行——扩展不能直接 import 核心的内部模块。如果一个扩展开发者确实需要核心的某个内部功能，正确的做法是什么？这种严格隔离会不会成为生态发展的瓶颈？
+
+**动手题**
+
+3. 参考 `extensions/` 目录下任意一个现有的 Channel Extension 的代码结构，创建一个最简单的"echo" Plugin：它在 `after_agent_turn` 钩子中将 Agent 的回复打印到 Gateway 的控制台日志。验证该 Plugin 能被 Gateway 正确加载和执行。0:{"rsc":["$","$1","c",{"children":[["$","div",null,{"className":"x:mx-auto x:flex x:max-w-(--nextra-content-width)","children":["$","$L2",null,{"value":[{"value":"26.1 两种插件风格","id":"261-两种插件风格","depth":2},{"value":"Code Plugins：进程内扩展","id":"code-plugins进程内扩展","depth":3},{"value":"Bundle-style Plugins：声明式扩展","id":"bundle-style-plugins声明式扩展","depth":3},{"value":"风格选择的决策树","id":"风格选择的决策树","depth":3},{"value":"26.2 Plugin SDK 的模块划分","id":"262-plugin-sdk-的模块划分","depth":2},{"value":"SDK 架构总览","id":"sdk-架构总览","depth":3},{"value":"各模块详解","id":"各模块详解","depth":3},{"value":"SDK 子路径的设计原则","id":"sdk-子路径的设计原则","depth":3},{"value":"26.3 Plugin 生命周期钩子","id":"263-plugin-生命周期钩子","depth":2},{"value":"钩子执行时序","id":"钩子执行时序","depth":3},{"value":"钩子分类","id":"钩子分类","depth":3},{"value":"before_tool_call 的审批机制","id":"before_tool_call-的审批机制","depth":3},{"value":"before_agent_start 的兼容性定位","id":"before_agent_start-的兼容性定位","depth":3},{"value":"26.4 Extension 的加载机制","id":"264-extension-的加载机制","depth":2},{"value":"jiti 运行时加载","id":"jiti-运行时加载","depth":3},{"value":"四阶段加载流水线","id":"四阶段加载流水线","depth":3},{"value":"registrationMode 的三种模式","id":"registrationmode-的三种模式","depth":3},{"value":"26.5 核心与扩展的边界原则","id":"265-核心与扩展的边界原则","depth":2},{"value":"边界的实施方式","id":"边界的实施方式","depth":3},{"value":"extensionAPI.ts 的兼容桥","id":"extensionapits-的兼容桥","depth":3},{"value":"插件配置的信任边界","id":"插件配置的信任边界","depth":3},{"value":"26.6 插件的发现与分发","id":"266-插件的发现与分发","depth":2},{"value":"ClawHub：官方插件市场","id":"clawhub官方插件市场","depth":3},{"value":"插件的形态分类","id":"插件的形态分类","depth":3},{"value":"26.7 本章小结","id":"267-本章小结","depth":2},{"value":"练习","id":"练习","depth":2}],"children":[["$","$L3",null,{}],["$","$L4",null,{"metadata":{"title":"第 26 章 — Plugin 与 Extension 开发：扩展 Gateway 能力","filePath":"content/openclaw/plugin-extension.md","timestamp":1778089813000},"sourceCode":"$5","children":["$L6","$L7"]}]]}]}],null,"$L8"]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"CR_c9URqh-5K47K_DC-c1"}
+6:["$","div",null,{"id":"nextra-skip-nav"}]
+9:T51c,{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://inferloop.dev/openclaw/plugin-extension#article","headline":"第 26 章 — Plugin 与 Extension 开发：扩展 Gateway 能力","description":"读完这章你能学到：OpenClaw 插件系统的完整架构，包括两种插件风格的设计哲学、Plugin SDK 的模块划分、生命周期钩子的执行时序，以及 jiti 运行时加载机制的实现细节。","inLanguage":"zh-CN","author":{"@type":"Person","name":"递归客"},"publisher":{"@type":"Organization","name":"InferLoop","url":"https://inferloop.dev"},"isPartOf":{"@type":"Book","name":"OpenClaw 源码解析","url":"https://inferloop.dev/openclaw","image":"https://images.redream.cn/images/9XtwZM.png"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://inferloop.dev/openclaw/plugin-extension"},"image":"https://images.redream.cn/images/9XtwZM.png"},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"首页","item":"https://inferloop.dev"},{"@type":"ListItem","position":2,"name":"OpenClaw 源码解析","item":"https://inferloop.dev/openclaw"},{"@type":"ListItem","position":3,"name":"第 26 章 — Plugin 与 Extension 开发：扩展 Gateway 能力","item":"https://inferloop.dev/openclaw/plugin-extension"}]}]}7:["$","main",null,{"data-pagefind-body":true,"children":[["$","script",null,{"type":"application/ld+json","dangerouslySetInnerHTML":{"__html":"$9"}}],[["$","h1",null,{"className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-bold x:mt-2 x:text-4xl","children":["第 26 章 — Plugin 与 Extension 开发：扩展 Gateway 能力","$undefined"]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"读完这章你能学到：OpenClaw 插件系统的完整架构，包括两种插件风格的设计哲学、Plugin SDK 的模块划分、生命周期钩子的执行时序，以及 jiti 运行时加载机制的实现细节。"}],"\n",["$","h2",null,{"id":"261-两种插件风格","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["26.1 两种插件风格",["$","$La",null,{"id":"261-两种插件风格"}]]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"OpenClaw 的 VISION.md 明确定义了两种插件风格："}],"\n",["$","blockquote",null,{"className":"x:not-first:mt-[1.25em] x:border-gray-300 x:italic x:text-gray-700 x:dark:border-gray-700 x:dark:text-gray-400 x:border-s-2 x:ps-[1.5em]","children":["\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"There are two broad plugin styles:"}],"\n",["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"Code plugins run OpenClaw plugin code and are appropriate for deeper runtime extension."}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"Bundle-style plugins package stable external surfaces such as skills, MCP servers, and related configuration."}],"\n"]}],"\n"]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这不是随意的分类，而是沿着”运行时权限”这条轴线做出的设计切分。"}],"\n",["$","h3",null,{"id":"code-plugins进程内扩展","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["Code Plugins：进程内扩展",["$","$La",null,{"id":"code-plugins进程内扩展"}]]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["Code plugins 在 Gateway 进程内执行，可以注册 providers、channels、hooks、tools、services 等能力。它们通过 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"register(api)"}]," 回调获得一个 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"OpenClawPluginApi"}]," 对象，进而操作 Gateway 的运行时注册表。"]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["一个最小的 Code plugin 长这样（引自 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"docs/plugins/building-plugins.md"}],"）："]}],"\n","$Lb","\n","$Lc","\n","$Ld","\n","$Le","\n","$Lf","\n","$L10","\n","$L11","\n","$L12","\n","$L13","\n","$L14","\n","$L15","\n","$L16","\n","$L17","\n","$L18","\n","$L19","\n","$L1a","\n","$L1b","\n","$L1c","\n","$L1d","\n","$L1e","\n","$L1f","\n","$L20","\n","$L21","\n","$L22","\n","$L23","\n","$L24","\n","$L25","\n","$L26","\n","$L27","\n","$L28","\n","$L29","\n","$L2a","\n","$L2b","\n","$L2c","\n","$L2d","\n","$L2e","\n","$L2f","\n","$L30","\n","$L31","\n","$L32","\n","$L33","\n","$L34","\n","$L35","\n","$L36","\n","$L37","\n","$L38","\n","$L39","\n","$L3a","\n","$L3b","\n","$L3c","\n","$L3d","\n","$L3e","\n","$L3f","\n","$L40","\n","$L41","\n","$L42","\n","$L43","\n","$L44","\n","$L45","\n","$L46","\n","$L47","\n","$L48","\n","$L49","\n","$L4a","\n","$L4b","\n","$L4c","\n","$L4d","\n","$L4e","\n","$L4f","\n","$L50","\n","$L51","\n","$L52","\n","$L53","\n","$L54","\n","$L55","\n","$L56","\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n","$L57","\n","$L58","\n","$L59","\n","$L5a","\n","$L5b","\n","$L5c","\n","$L5d","\n","$L5e","\n","$L5f","\n","$L60","\n","$L61","\n","$L62","\n","$L63","\n","$L64","\n","$L65","\n","$L66","\n","$L67","\n","$L68","\n","$L69","\n","$L6a","\n","$L6b","\n","$L6c","\n","$L6d","\n","$L6e","\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n","$L6f","\n","$L70","\n","$L71","\n","$L72","\n","$L73","\n","$L74","\n","$L75","\n","$L76","\n","$L77","\n","$L78","\n","$L79","\n","$L7a","\n","$L7b"]]}]
+8:["$","$L7c",null,{"children":["$","$7d",null,{"name":"Next.MetadataOutlet","children":"$@7e"}]}]
+b:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L7f",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L80",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"import"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" { definePluginEntry } "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"from"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"openclaw/plugin-sdk/plugin-entry\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}],"\n",["$","span",null,{"children":" "}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"export"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":" default"}],["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":" definePluginEntry"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"({"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  id: "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"my-plugin\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  name: "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"My Plugin\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  description: "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"Adds a custom tool to OpenClaw\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"  register"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"("}],["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"api"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":") {"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"    api."}],["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"registerTool"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"({"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"      name: "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"my_tool\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"      description: "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"Does something useful\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n","$L81","\n","$L82","\n","$L83","\n","$L84","\n","$L85","\n","$L86","\n","$L87"]}]]}]]}]
+c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Code plugin 的权限边界是进程级的——它和 Gateway 共享内存空间，可以注册 HTTP 路由、Gateway RPC 方法、后台服务，甚至替换 Agent 的执行引擎。"}]
+d:["$","h3",null,{"id":"bundle-style-plugins声明式扩展","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["Bundle-style Plugins：声明式扩展",["$","$La",null,{"id":"bundle-style-plugins声明式扩展"}]]}]
+e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["Bundle plugins 不执行代码，而是打包稳定的外部资源：Skills 文件、MCP Server 配置、Agent 指令等。它们兼容 Codex/Claude/Cursor 的插件目录布局（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":".codex-plugin/"}],"、",["$","code",null,{"className":"nextra-code","dir":"ltr","children":".claude-plugin/"}],"、",["$","code",null,{"className":"nextra-code","dir":"ltr","children":".cursor-plugin/"}],"），通过 manifest 映射到 OpenClaw 的功能。"]}]
+f:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Bundle plugins 的安全边界更好——它们只提供数据，不注入运行时行为。VISION.md 中的指导原则是："}]
+10:["$","blockquote",null,{"className":"x:not-first:mt-[1.25em] x:border-gray-300 x:italic x:text-gray-700 x:dark:border-gray-700 x:dark:text-gray-400 x:border-s-2 x:ps-[1.5em]","children":["\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Prefer bundle-style plugins when they can express the capability. They have a smaller, more stable interface and better security boundaries."}],"\n"]}]
+11:["$","h3",null,{"id":"风格选择的决策树","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["风格选择的决策树",["$","$La",null,{"id":"风格选择的决策树"}]]}]
+12:["$","$L88",null,{"chart":"graph TD\\n    A[需要扩展 OpenClaw 能力?] -->|是| B{需要运行时钩子?<br/>自定义 Provider?<br/>Channel 集成?}\\n    B -->|是| C[Code Plugin<br/>definePluginEntry]\\n    B -->|否| D{需要 Skills?<br/>MCP Server?<br/>配置模板?}\\n    D -->|是| E[Bundle Plugin<br/>目录结构 + manifest]\\n    D -->|否| F[可能不需要插件<br/>检查内置功能]"}]
+13:["$","h2",null,{"id":"262-plugin-sdk-的模块划分","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["26.2 Plugin SDK 的模块划分",["$","$La",null,{"id":"262-plugin-sdk-的模块划分"}]]}]
+14:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["Plugin SDK 位于 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/plugin-sdk/"}],"，是插件与核心之间的类型化契约。SDK 按职责分为多个子路径，每个子路径是一个独立的 ESM 模块。"]}]
+15:["$","h3",null,{"id":"sdk-架构总览","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["SDK 架构总览",["$","$La",null,{"id":"sdk-架构总览"}]]}]
+16:["$","$L88",null,{"chart":"graph TB\\n    subgraph \"Plugin SDK 子路径\"\\n        PE[plugin-entry<br/>插件入口定义] --> CORE[core<br/>综合导出表面]\\n        CC[channel-core<br/>Channel 插件入口] --> CORE\\n        PRE[provider-entry<br/>Provider 快捷入口] --> PE\\n        GR[gateway-runtime<br/>Gateway 客户端/RPC] --> CORE\\n        AH[agent-harness<br/>Agent 执行引擎替换] --> CORE\\n        MC[memory-core-host-*<br/>Memory 插件运行时] --> CORE\\n        PR[process-runtime<br/>子进程工具] --> CORE\\n    end\\n\\n    subgraph \"插件代码\"\\n        P1[Provider Plugin] -->|import| PRE\\n        P2[Channel Plugin] -->|import| CC\\n        P3[Tool Plugin] -->|import| PE\\n        P4[Memory Plugin] -->|import| MC\\n    end\\n\\n    subgraph \"Gateway Core\"\\n        LOADER[src/plugins/loader.ts<br/>插件加载器] -->|调用| PE\\n        REG[src/plugins/registry.ts<br/>注册表] -->|消费| CORE\\n    end"}]
+17:["$","h3",null,{"id":"各模块详解","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["各模块详解",["$","$La",null,{"id":"各模块详解"}]]}]
+18:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":["plugin-entry（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/plugin-sdk/plugin-entry.ts"}],"）"]}]}]
+19:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["插件入口的规范定义。",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"definePluginEntry"}]," 函数接受 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"id"}],"、",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"name"}],"、",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"description"}],"、",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"register"}]," 等字段，返回一个标准化的插件定义对象。核心实现只有 20 行（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/plugin-sdk/plugin-entry.ts:254-279"}],"）："]}]
+1a:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L7f",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L80",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"export"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":" function"}],["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":" definePluginEntry"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"({"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"  id"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":", "}],["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"name"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":", "}],["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"description"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":", "}],["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"kind"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"  configSchema"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":" ="}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" emptyPluginConfigSchema,"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"  reload"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":", "}],["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"nodeHostCommands"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":", "}],["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"securityAuditCollectors"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":", "}],["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"register"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"}"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":":"}],["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":" DefinePluginEntryOptions"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":")"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":":"}],["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":" DefinedPluginEntry"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" {"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"  const"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" getConfigSchema"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":" ="}],"$L89","$L8a"]}],"\n","$L8b","\n","$L8c","\n","$L8d","\n","$L8e","\n","$L8f","\n","$L90","\n","$L91","\n","$L92","\n","$L93","\n","$L94","\n","$L95","\n","$L96"]}]]}]]}]
+1b:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","code",null,{"className":"nextra-code","dir":"ltr","children":"configSchema"}]," 支持传入一个工厂函数，通过 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"createCachedLazyValueGetter"}]," 实现延迟求值并缓存——这对包含大量校验规则的 Provider 插件来说，避免了不必要的 schema 解析开销。"]}]
+1c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":["channel-core（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/plugin-sdk/channel-core.ts"}],"）"]}]}]
+1d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["Channel 插件的入口。",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"defineChannelPluginEntry"}]," 是对 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"definePluginEntry"}]," 的封装，自动调用 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"api.registerChannel({ plugin })"}]," 并支持分阶段注册（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/plugin-sdk/channel-core.ts:11-29"}],"）："]}]
+1e:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L7f",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L80",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"export"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":" const"}],["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":" createChannelPluginBase"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":" ="}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" ("}],["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"params"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":") "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"=>"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"  createChannelPluginBaseFromCore"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"(params);"}]]}],"\n",["$","span",null,{"children":" "}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"export"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" {"}]]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  buildChannelConfigSchema,"}]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  buildChannelOutboundSessionRoute,"}]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  buildThreadAwareOutboundSessionRoute,"}]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  defineChannelPluginEntry,"}]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  defineSetupPluginEntry,"}]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"  // ..."}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"} "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"from"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"./core.js\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}]]}]]}]]}]
+1f:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["Channel 插件有两个注册阶段：",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"registerCliMetadata"}],"（CLI 元数据，非激活式）和 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"registerFull"}],"（完整运行时，仅在 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"registrationMode === \"full\""}]," 时执行）。这个分阶段设计确保了 CLI help 和 discovery 快照可以在不加载完整插件运行时的情况下工作。"]}]
+20:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":["provider-entry（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/plugin-sdk/provider-entry.ts"}],"）"]}]}]
+21:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["Provider 插件的快捷入口。封装了 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"definePluginEntry"}]," + ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"api.registerProvider(...)"}]," + API Key 认证方法 + 模型目录的标准化流程（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/plugin-sdk/provider-entry.ts:1-64"}],"）："]}]
+22:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L7f",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L80",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"export"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":" type"}],["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":" SingleProviderPluginOptions"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":" ="}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" {"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"  id"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":":"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" string"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"  name"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":":"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" string"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"  description"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":":"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" string"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"  provider"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"?:"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" {"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"    id"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"?:"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" string"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"    label"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":":"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" string"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"    docsPath"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":":"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" string"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"    auth"}],"$L97","$L98","$L99"]}],"\n","$L9a","\n","$L9b","\n","$L9c","\n","$L9d"]}]]}]]}]
+23:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"大多数 Provider 插件只需填写这个结构体，不用手动处理认证流程和模型发现逻辑。"}]
+24:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":["gateway-runtime（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/plugin-sdk/gateway-runtime.ts"}],"）"]}]}]
+25:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["暴露 Gateway 客户端和 RPC 工具给需要与 Gateway 交互的插件。主要导出 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"GatewayClient"}],"、协议相关的 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"ErrorCodes"}],"、",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"errorShape"}],"，以及 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"resolveGatewayAuth"}]," 等鉴权工具（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/plugin-sdk/gateway-runtime.ts:1-27"}],"）："]}]
+26:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L7f",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L80",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"export"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" { GatewayClient } "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"from"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"../gateway/client.js\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"export"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" { ErrorCodes, errorShape } "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"from"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"../gateway/protocol/index.js\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"export"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" { ensureGatewayStartupAuth } "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"from"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"../gateway/startup-auth.js\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"export"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" { resolveGatewayAuth } "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"from"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"../gateway/auth.js\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}]]}]]}]]}]
+27:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":["agent-harness（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/plugin-sdk/agent-harness.ts"}],"）"]}]}]
+28:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["实验性接口，允许插件替换 OpenClaw 默认的 Agent 执行引擎。整个模块只有两行导出（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/plugin-sdk/agent-harness.ts:3-5"}],"）："]}]
+29:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L7f",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L80",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"export"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" *"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":" from"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"./agent-harness-runtime.js\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"export"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" { createOpenClawCodingTools } "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"from"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"../agents/pi-tools.js\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}]]}]]}]]}]
+2a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Agent harness 插件可以接管整个 Agent 循环——从接收用户消息到产生回复的完整过程。这是插件系统中权限最大的扩展点。"}]
+2b:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"memory-core-host-runtime-core"}]}]
+2c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["Memory 插件的运行时核心，导出内存引擎的注册、查询、嵌入等接口。Memory 是一个独占插槽——同一时刻只能有一个 memory 插件处于活跃状态（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"VISION.md:75-76"}],"）："]}]
+2d:["$","blockquote",null,{"className":"x:not-first:mt-[1.25em] x:border-gray-300 x:italic x:text-gray-700 x:dark:border-gray-700 x:dark:text-gray-400 x:border-s-2 x:ps-[1.5em]","children":["\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Memory is a special plugin slot where only one memory plugin can be active at a time."}],"\n"]}]
+2e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":["process-runtime（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/plugin-sdk/process-runtime.ts"}],"）"]}]}]
+2f:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["给需要启动子进程的插件用的工具集，导出 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"exec"}]," 等进程管理工具和 Linux OOM score 调整能力。"]}]
+30:["$","h3",null,{"id":"sdk-子路径的设计原则","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["SDK 子路径的设计原则",["$","$La",null,{"id":"sdk-子路径的设计原则"}]]}]
+31:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["SDK 的边界规范记录在 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/plugin-sdk/CLAUDE.md"}]," 中，核心原则有三条："]}]
+32:["$","ol",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-decimal x:ms-6","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"宿主加载插件，插件不穿透 SDK 到宿主内部。"}]," 插件通过 SDK 子路径获得能力，不能直接 import ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/agents/**"}],"、",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/channels/**"}]," 等核心模块。"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"窄子路径优于宽桶导出。"}]," 每个子路径只解决一个能力需求，避免 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"import * from \"openclaw/plugin-sdk\""}]," 这种拉进整个 SDK 的做法。"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"SDK 入口在模块加载时必须轻量。"}]," 如果某个 helper 只在异步路径（发送、监控、探测）上需要，放到专门的 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"*.runtime"}]," 子路径，不要通过热路径的 barrel 导出。"]}],"\n"]}]
+33:["$","h2",null,{"id":"263-plugin-生命周期钩子","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["26.3 Plugin 生命周期钩子",["$","$La",null,{"id":"263-plugin-生命周期钩子"}]]}]
+34:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["插件通过 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"api.on(hookName, handler, opts?)"}]," 注册生命周期钩子。钩子按优先级降序执行，同优先级保持注册顺序。"]}]
+35:["$","h3",null,{"id":"钩子执行时序","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["钩子执行时序",["$","$La",null,{"id":"钩子执行时序"}]]}]
+36:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"一次完整的 Gateway 启动到响应消息的钩子触发顺序："}]
+9e:T503,sequenceDiagram\n    participant G as Gateway\n    participant P as Plugin Hooks\n    participant A as Agent Runtime\n\n    Note over G: Gateway 启动\n    G->>P: gateway_start\n\n    Note over G: 收到用户消息\n    G->>P: inbound_claim（可拦截）\n    G->>P: message_received（观察）\n\n    Note over A: Agent 处理\n    A->>P: before_model_resolve（可覆盖 provider/model）\n    A->>P: agent_turn_prepare（注入上下文）\n    A->>P: before_prompt_build（修改 system prompt）\n    A->>P: before_agent_reply（可短路）\n    A->>P: model_call_started（观察）\n    A->>P: llm_input（观察）\n\n    Note over A: 工具调用\n    A->>P: before_tool_call（可拦截/重写/要求审批）\n    A->>P: after_tool_call（观察）\n    A->>P: tool_result_persist（可重写）\n\n    Note over A: Agent 完成\n    A->>P: llm_output（观察）\n    A->>P: model_call_ended（观察）\n    A->>P: before_agent_finalize（可请求再跑一轮）\n    A->>P: agent_end（观察）\n\n    Note over G: 发送回复\n    G->>P: message_sending（可重写/取消）\n    G->>P: before_dispatch（可重写）\n    G->>P: reply_dispatch（参与分发）\n    G->>P: message_sent（观察）\n\n    Note over G: Gateway 关闭\n    G->>P: gateway_stop37:["$","$L88",null,{"chart":"$9e"}]
+38:["$","h3",null,{"id":"钩子分类","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["钩子分类",["$","$La",null,{"id":"钩子分类"}]]}]
+39:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["钩子分为两类：",["$","strong",null,{"children":"决策型"}],"和",["$","strong",null,{"children":"观察型"}],"。"]}]
+3a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"决策型钩子"}],"可以改变执行流程——拦截、重写、要求审批或取消操作。源码中定义了完整的决策型钩子列表（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/plugins/hook-types.ts:70-105"}],"）："]}]
+3b:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L7f",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L80",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"export"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":" type"}],["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":" PluginHookName"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":" ="}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"  |"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"before_model_resolve\""}],["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"      // 覆盖 provider/model"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"  |"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"before_agent_reply\""}],["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"        // 短路回复"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"  |"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"before_agent_finalize\""}],["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"     // 请求额外的模型调用"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"  |"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"before_tool_call\""}],["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"          // 拦截/重写/审批"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"  |"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"tool_result_persist\""}],["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"       // 重写工具结果"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"  |"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"before_message_write\""}],["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"      // 拦截消息写入"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"  |"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"inbound_claim\""}],["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"             // 拦截入站消息"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"  |"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"message_sending\""}],["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"           // 重写/取消出站消息"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"  |"}],"$L9f","$La0"]}],"\n","$La1","\n","$La2","\n","$La3"]}]]}]]}]
+3c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"观察型钩子"}],"只接收事件通知，不能改变执行流程：",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"message_received"}],"、",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"message_sent"}],"、",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"model_call_started"}],"/",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"ended"}],"、",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"llm_input"}],"/",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"output"}],"、",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"agent_end"}],"、",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"session_start"}],"/",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"end"}]," 等。"]}]
+3d:["$","h3",null,{"id":"before_tool_call-的审批机制","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["before_tool_call 的审批机制",["$","$La",null,{"id":"before_tool_call-的审批机制"}]]}]
+3e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","code",null,{"className":"nextra-code","dir":"ltr","children":"before_tool_call"}]," 是插件系统中最有实战价值的钩子之一。它的返回类型展示了精细的控制粒度（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"docs/plugins/hooks.md:129-144"}],"）："]}]
+3f:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L7f",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L80",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"type"}],["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":" BeforeToolCallResult"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":" ="}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" {"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"  params"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"?:"}],["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":" Record"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"<"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"string"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":", "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"unknown"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":">;   "}],["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"// 重写工具参数"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"  block"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"?:"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" boolean"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";                     "}],["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"// 直接拦截"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"  blockReason"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"?:"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" string"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";                "}],["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"// 拦截原因"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"  requireApproval"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"?:"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" {                  "}],["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"// 要求人工审批"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"    title"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":":"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" string"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"    description"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":":"}],"$La4","$La5"]}],"\n","$La6","\n","$La7","\n","$La8","\n","$La9","\n","$Laa"]}]]}]]}]
+40:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","code",null,{"className":"nextra-code","dir":"ltr","children":"block: true"}]," 是终结性的——跳过所有低优先级的 handler。",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"requireApproval"}]," 会暂停工具执行，等待操作者通过 Control UI 或其他审批通道做出决定。"]}]
+41:["$","h3",null,{"id":"before_agent_start-的兼容性定位","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["before_agent_start 的兼容性定位",["$","$La",null,{"id":"before_agent_start-的兼容性定位"}]]}]
+42:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","code",null,{"className":"nextra-code","dir":"ltr","children":"before_agent_start"}]," 是最早的插件钩子，也是目前标记为 legacy 的钩子。它把模型选择和 prompt 修改混在一起。新的架构将它拆分为两个独立关注点（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"docs/plugins/architecture.md:91-99"}],"）："]}]
+43:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","code",null,{"className":"nextra-code","dir":"ltr","children":"before_model_resolve"}],"：处理 model/provider 覆盖"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","code",null,{"className":"nextra-code","dir":"ltr","children":"before_prompt_build"}],"：处理 prompt 修改"]}],"\n"]}]
+44:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","code",null,{"className":"nextra-code","dir":"ltr","children":"before_agent_start"}]," 仍然完全支持——真实世界的外部插件依赖它。但新插件应该使用拆分后的钩子。"]}]
+45:["$","h2",null,{"id":"264-extension-的加载机制","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["26.4 Extension 的加载机制",["$","$La",null,{"id":"264-extension-的加载机制"}]]}]
+46:["$","h3",null,{"id":"jiti-运行时加载","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["jiti 运行时加载",["$","$La",null,{"id":"jiti-运行时加载"}]]}]
+47:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["OpenClaw 使用 ",["$","a",null,{"href":"https://github.com/unjs/jiti","target":"_blank","rel":"noopener noreferrer","children":["jiti",["$","svg",null,{"aria-hidden":true,"width":"0.85em","height":"0.85em","viewBox":"0 0 24 24","fill":"none","stroke":"currentColor","strokeWidth":"2","strokeLinecap":"round","strokeLinejoin":"round","style":{"display":"inline-block","marginLeft":"0.18em","marginRight":"0.05em","verticalAlign":"-0.08em","opacity":0.65},"children":[["$","path",null,{"d":"M7 17L17 7"}],["$","path",null,{"d":"M8 7h9v9"}]]}]]}]," 在运行时加载 TypeScript 插件源码。jiti 是一个运行时 TypeScript/ESM 转换器，让 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":".ts"}]," 文件可以直接被 Node.js import，无需预编译。"]}]
+48:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["加载器的核心在 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/plugins/jiti-loader-cache.ts"}],"（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/plugins/jiti-loader-cache.ts:1-60"}],"）："]}]
+49:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L7f",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L80",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"import"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" { createJiti } "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"from"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"jiti\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}],"\n",["$","span",null,{"children":" "}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"export"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":" function"}],["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":" getCachedPluginJitiLoader"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"("}],["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"params"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":":"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" {"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"  cache"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":":"}],["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":" PluginJitiLoaderCache"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"  modulePath"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":":"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" string"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"  importerUrl"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":":"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" string"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"  preferBuiltDist"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"?:"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" boolean"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"  pluginSdkResolution"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"?:"}],["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":" PluginSdkResolutionPreference"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}],"\n","$Lab","\n","$Lac","\n","$Lad","\n","$Lae","\n","$Laf","\n","$Lb0"]}]]}]]}]
+4a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["关键设计：每个插件的加载路径对应一个缓存的 jiti 实例，避免重复创建。jiti 实例的配置包括 SDK 别名映射（让 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"openclaw/plugin-sdk/*"}]," 解析到正确路径）和原生模块加载策略。"]}]
+4b:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["当插件提供了编译后的 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":".js"}]," 文件时（通过 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"package.json"}]," 中的 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"runtimeExtensions"}]," 字段），加载器优先使用编译产物，跳过运行时转译。这是 npm 发布的插件推荐的做法——源码入口供开发时用，编译入口供生产用。"]}]
+4c:["$","h3",null,{"id":"四阶段加载流水线","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["四阶段加载流水线",["$","$La",null,{"id":"四阶段加载流水线"}]]}]
+4d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["插件加载不是一次性完成的，而是分四个阶段（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"docs/plugins/architecture.md:118-131"}],"）："]}]
+4e:["$","$L88",null,{"chart":"graph LR\\n    A[1. Manifest + Discovery<br/>发现候选插件] --> B[2. Enablement + Validation<br/>启用/禁用/阻止]\\n    B --> C[3. Runtime Loading<br/>jiti 加载 + 注册]\\n    C --> D[4. Surface Consumption<br/>注册表消费]"}]
+4f:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"阶段 1：发现。"}]," 从配置路径、workspace 根目录、全局插件目录、bundled 插件中搜索候选插件。读取 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"openclaw.plugin.json"}]," manifest。这个阶段不执行任何插件代码。"]}]
+50:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"阶段 2：验证。"}]," 根据配置决定每个候选插件的状态：enabled（启用）、disabled（禁用）、blocked（被 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"plugins.deny"}]," 阻止）、或被选入独占插槽（如 memory）。验证基于 manifest 元数据完成，不需要执行插件代码。"]}]
+51:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"阶段 3：运行时加载。"}]," 通过 jiti 加载插件的 entry 模块，调用 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"register(api)"}]," 回调，将能力注册到中央注册表。Bundle 插件在这个阶段被归一化为注册表记录，不导入运行时代码。"]}]
+52:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"阶段 4：消费。"}]," Gateway 的其他模块从注册表读取已注册的 tools、channels、providers、hooks、HTTP routes、CLI commands 和 services。"]}]
+53:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["这个分阶段设计的核心意图是：让配置验证、UI 提示、schema 生成等”冷路径”操作可以在完整运行时启动之前完成。用 CLAUDE.md 的话说（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/plugins/CLAUDE.md"}],"）："]}]
+54:["$","blockquote",null,{"className":"x:not-first:mt-[1.25em] x:border-gray-300 x:italic x:text-gray-700 x:dark:border-gray-700 x:dark:text-gray-400 x:border-s-2 x:ps-[1.5em]","children":["\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"manifest/config validation should work from manifest/schema metadata without executing plugin code"}],"\n"]}]
+55:["$","h3",null,{"id":"registrationmode-的三种模式","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["registrationMode 的三种模式",["$","$La",null,{"id":"registrationmode-的三种模式"}]]}]
+56:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","code",null,{"className":"nextra-code","dir":"ltr","children":"register(api)"}]," 回调中的 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"api.registrationMode"}]," 有三种值："]}]
+57:["$","table",null,{"className":"x:block x:overflow-x-auto nextra-scrollbar x:not-first:mt-[1.25em] x:p-0","children":[["$","thead",null,{"children":["$","tr",null,{"children":[["$","th",null,{"children":"模式","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"触发场景","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"允许的操作","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]}],["$","tbody",null,{"children":[["$","tr",null,{"children":[["$","td",null,{"children":["$","code",null,{"className":"nextra-code","dir":"ltr","children":"\"full\""}],"className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"Gateway 正常启动","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"所有注册操作","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":["$","code",null,{"className":"nextra-code","dir":"ltr","children":"\"cli-metadata\""}],"className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"CLI help / 命令发现","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":["仅 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"registerCli"}]],"className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":["$","code",null,{"className":"nextra-code","dir":"ltr","children":"\"discovery\""}],"className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"非激活式快照构建","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"静态元数据注册","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]]}]]}]
+58:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["Channel 插件利用这个机制实现懒加载：在 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"\"cli-metadata\""}]," 和 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"\"discovery\""}]," 模式下只注册 CLI 描述符，在 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"\"full\""}]," 模式下才建立网络连接和注册完整运行时。"]}]
+59:["$","h2",null,{"id":"265-核心与扩展的边界原则","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["26.5 核心与扩展的边界原则",["$","$La",null,{"id":"265-核心与扩展的边界原则"}]]}]
+5a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["OpenClaw 的架构指南用一句话概括了边界原则（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"AGENTS.md"}],"）："]}]
+5b:["$","blockquote",null,{"className":"x:not-first:mt-[1.25em] x:border-gray-300 x:italic x:text-gray-700 x:dark:border-gray-700 x:dark:text-gray-400 x:border-s-2 x:ps-[1.5em]","children":["\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Core stays extension-agnostic. No bundled ids in core when manifest/registry/capability contracts work."}],"\n"]}]
+5c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这条规则在代码中的体现无处不在。"}]
+5d:["$","h3",null,{"id":"边界的实施方式","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["边界的实施方式",["$","$La",null,{"id":"边界的实施方式"}]]}]
+5e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"扩展只能通过 SDK 跨入核心。"}]," 插件不能直接 import ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/agents/**"}],"、",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/channels/**"}],"、",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/plugins/**"}]," 等核心模块，只能通过 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"openclaw/plugin-sdk/*"}]," 子路径获取能力。在运行时，加载器通过 jiti 的别名映射强制执行这个约束。"]}]
+5f:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"核心不知道具体扩展的存在。"}]," 核心代码中不会出现 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"if (pluginId === \"telegram\")"}]," 这样的硬编码。Provider 认证、Channel 路由、工具注册都通过通用契约完成——manifest metadata、capability registration、injected runtime helpers。"]}]
+60:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"独占插槽用声明式元数据，不用运行时检测。"}]," Memory 插件是独占插槽的典型例子：通过 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"kind: \"memory\""}]," 声明，由配置系统（不是运行时代码）决定哪个 memory 插件生效。"]}]
+61:["$","h3",null,{"id":"extensionapits-的兼容桥","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["extensionAPI.ts 的兼容桥",["$","$La",null,{"id":"extensionapits-的兼容桥"}]]}]
+62:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/extensionAPI.ts"}]," 是一个有趣的历史遗留（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"src/extensionAPI.ts:1-33"}],"）："]}]
+63:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L7f",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L80",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"if"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" (shouldWarnExtensionApiImport) {"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  process."}],["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"emitWarning"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"("}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"    \"openclaw/extension-api is deprecated. Migrate to api.runtime.agent.* \""}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":" +"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"    \"or focused openclaw/plugin-sdk/<subpath> imports.\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"    {"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"      code: "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"OPENCLAW_EXTENSION_API_DEPRECATED\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"      detail: "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"This compatibility bridge is temporary.\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"    },"}]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  );"}]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"}"}]}]]}]]}]]}]
+64:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["这个文件是旧插件 API 到新 Plugin SDK 的兼容桥。它只重新导出了少量基础工具（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"resolveAgentDir"}],"、",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"DEFAULT_MODEL"}],"、",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"resolveAgentIdentity"}]," 等），并在非测试环境下打印弃用警告。新插件应该直接使用 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"openclaw/plugin-sdk/<subpath>"}]," 的窄导入。"]}]
+65:["$","h3",null,{"id":"插件配置的信任边界","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["插件配置的信任边界",["$","$La",null,{"id":"插件配置的信任边界"}]]}]
+66:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["插件系统在配置层也有明确的信任分级。从源码中的 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"PluginHookName"}]," 类型和文档可以提炼出三级信任模型："]}]
+67:["$","$L88",null,{"chart":"graph TB\\n    subgraph \"Bundled Only（仅内置插件）\"\\n        T1[Trusted Tool Policy<br/>before_tool_call 之前执行]\\n        T2[Reserved Command Ownership<br/>核心命令保留]\\n    end\\n\\n    subgraph \"Full Trust（所有已安装插件）\"\\n        T3[Session Extensions]\\n        T4[UI Descriptors]\\n        T5[Commands]\\n        T6[Tool Metadata]\\n        T7[Normal Hooks]\\n    end\\n\\n    subgraph \"Restricted（受限能力）\"\\n        T8[allowPromptInjection=false<br/>禁用 prompt 修改类钩子]\\n    end"}]
+68:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["Trusted Tool Policy 在普通的 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"before_tool_call"}]," 钩子之前执行，参与宿主安全策略——这个能力只开放给 bundled（内置）插件，第三方插件无法注册。"]}]
+69:["$","h2",null,{"id":"266-插件的发现与分发","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["26.6 插件的发现与分发",["$","$La",null,{"id":"266-插件的发现与分发"}]]}]
+6a:["$","h3",null,{"id":"clawhub官方插件市场","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["ClawHub：官方插件市场",["$","$La",null,{"id":"clawhub官方插件市场"}]]}]
+6b:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["插件的发现、官方发布者认证、来源追溯和安全审查由 ",["$","a",null,{"href":"https://clawhub.ai/","target":"_blank","rel":"noopener noreferrer","children":["ClawHub",["$","svg",null,{"aria-hidden":true,"width":"0.85em","height":"0.85em","viewBox":"0 0 24 24","fill":"none","stroke":"currentColor","strokeWidth":"2","strokeLinecap":"round","strokeLinejoin":"round","style":{"display":"inline-block","marginLeft":"0.18em","marginRight":"0.05em","verticalAlign":"-0.08em","opacity":0.65},"children":[["$","path",null,{"d":"M7 17L17 7"}],["$","path",null,{"d":"M8 7h9v9"}]]}]]}]," 负责。安装时 OpenClaw 优先查询 ClawHub，找不到再回退到 npm："]}]
+6c:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L7f",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L80",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# ClawHub 优先，自动回退 npm"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"openclaw"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" plugins"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" install"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" @openclaw/voice-call"}]]}],"\n",["$","span",null,{"children":" "}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# 显式指定来源"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"openclaw"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" plugins"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" install"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" clawhub:@openclaw/voice-call"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"openclaw"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" plugins"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" install"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" npm:my-custom-plugin"}]]}]]}]]}]]}]
+6d:["$","h3",null,{"id":"插件的形态分类","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["插件的形态分类",["$","$La",null,{"id":"插件的形态分类"}]]}]
+6e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["Gateway 在运行时将每个已加载的插件分类为一种”shape”（",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"docs/plugins/architecture.md:69-85"}],"）："]}]
+6f:["$","table",null,{"className":"x:block x:overflow-x-auto nextra-scrollbar x:not-first:mt-[1.25em] x:p-0","children":[["$","thead",null,{"children":["$","tr",null,{"children":[["$","th",null,{"children":"Shape","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"含义","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"判定依据","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]}],["$","tbody",null,{"children":[["$","tr",null,{"children":[["$","td",null,{"children":["$","code",null,{"className":"nextra-code","dir":"ltr","children":"plain-capability"}],"className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"注册了单一能力类型","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":["如只注册 Provider 的 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"mistral"}]],"className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":["$","code",null,{"className":"nextra-code","dir":"ltr","children":"hybrid-capability"}],"className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"注册了多种能力类型","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":["如同时注册 text inference + speech + image 的 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"openai"}]],"className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":["$","code",null,{"className":"nextra-code","dir":"ltr","children":"hook-only"}],"className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"只注册了钩子","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"无 capability、tool、command、service","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":["$","code",null,{"className":"nextra-code","dir":"ltr","children":"non-capability"}],"className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"注册了 tool/command/service 但无 capability","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"辅助工具类插件","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]]}]]}]
+70:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["用 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"openclaw plugins inspect <id>"}]," 可以查看任何插件的 shape 和能力明细。"]}]
+71:["$","h2",null,{"id":"267-本章小结","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["26.7 本章小结",["$","$La",null,{"id":"267-本章小结"}]]}]
+72:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"OpenClaw 的插件系统沿着三条设计轴线展开："}]
+73:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"权限轴线"}],"——Code plugins 拥有进程内的完整能力，Bundle plugins 只提供声明式数据。选择哪种风格取决于你需要多深的运行时控制。"]}]
+74:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"生命周期轴线"}],"——从 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"gateway_start"}]," 到 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"gateway_stop"}],"，覆盖 Agent turn、工具调用、消息分发、会话管理的完整链路。30 个钩子点分为决策型和观察型，开发者根据需要选择粒度。"]}]
+75:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"边界轴线"}],"——核心与扩展通过 Plugin SDK 的窄子路径交互，核心不知道具体扩展的存在，扩展不穿透 SDK 到核心内部。这条规则由 jiti 加载器的别名映射在运行时强制执行。"]}]
+76:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"理解了这三条轴线，就掌握了开发 OpenClaw 插件的设计框架。下一章将进入 OpenClaw 的生态体系，看看围绕这个插件系统已经生长出了什么。"}]
+77:["$","h2",null,{"id":"练习","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["练习",["$","$La",null,{"id":"练习"}]]}]
+78:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"思考题"}]}]
+79:["$","ol",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-decimal x:ms-6","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":["\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["Plugin SDK 有 30 个生命周期钩子，分为决策型（能修改行为）和观察型（只读）。如果一个插件在 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"before_tool_call"}]," 钩子中执行了一个耗时的网络请求（比如向外部审批系统发送请求），这会阻塞整个工具调用链。你认为应该给钩子设置超时限制吗？超时后应该默认放行还是默认拒绝？两种选择各自的风险是什么？"]}],"\n"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":["\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"核心与扩展的边界由 jiti 加载器的别名映射在运行时强制执行——扩展不能直接 import 核心的内部模块。如果一个扩展开发者确实需要核心的某个内部功能，正确的做法是什么？这种严格隔离会不会成为生态发展的瓶颈？"}],"\n"]}],"\n"]}]
+7a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"动手题"}]}]
+7b:["$","ol",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-decimal x:ms-6","start":"3","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":["参考 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"extensions/"}]," 目录下任意一个现有的 Channel Extension 的代码结构，创建一个最简单的”echo” Plugin：它在 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"after_agent_turn"}]," 钩子中将 Agent 的回复打印到 Gateway 的控制台日志。验证该 Plugin 能被 Gateway 正确加载和执行。"]}],"\n"]}]
+7e:null
+81:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"      parameters: { type: "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"object\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":", properties: {} },"}]]}]
+82:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"      execute"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"async"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" ("}],["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"params"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":") "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"=>"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" {"}]]}]
+83:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"        return"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" { result: "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"done\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" };"}]]}]
+84:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"      },"}]}]
+85:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"    });"}]}]
+86:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  },"}]}]
+87:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"});"}]}]
+89:["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":" createCachedLazyValueGetter"}]
+8a:["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"(configSchema);"}]
+8b:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"  return"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" {"}]]}]
+8c:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"    id, name, description,"}]}]
+8d:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"    ..."}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"(kind "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"?"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" { kind } "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":":"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" {}),"}]]}]
+8e:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"    ..."}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"(reload "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"?"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" { reload } "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":":"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" {}),"}]]}]
+8f:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"    ..."}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"(nodeHostCommands "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"?"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" { nodeHostCommands } "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":":"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" {}),"}]]}]
+90:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"    ..."}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"(securityAuditCollectors "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"?"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" { securityAuditCollectors } "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":":"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" {}),"}]]}]
+91:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"    get"}],["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":" configSchema"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"() {"}]]}]
+92:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"      return"}],["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":" getConfigSchema"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"();"}]]}]
+93:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"    },"}]}]
+94:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"    register,"}]}]
+95:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  };"}]}]
+96:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"}"}]}]
+97:["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"?:"}]
+98:["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":" SingleProviderPluginApiKeyAuthOptions"}]
+99:["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"[];"}]
+9a:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"    catalog"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":":"}],["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":" SingleProviderPluginCatalogOptions"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}]
+9b:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  };"}]}]
+9c:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"  register"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"?:"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" ("}],["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"api"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":":"}],["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":" OpenClawPluginApi"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":") "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"=>"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" void"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}]
+9d:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"};"}]}]
+9f:["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"before_dispatch\""}]
+a0:["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"           // 重写分发"}]
+a1:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"  |"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"reply_dispatch\""}],["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"            // 参与分发管道"}]]}]
+a2:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"  |"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"before_install\""}],["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"            // 拦截安装"}]]}]
+a3:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"  // ...观察型钩子省略"}]}]
+a4:["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" string"}]
+a5:["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]
+a6:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"    severity"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"?:"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"info\""}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":" |"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"warning\""}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":" |"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"critical\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}]
+a7:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"    timeoutMs"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"?:"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" number"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}]
+a8:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"    timeoutBehavior"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"?:"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"allow\""}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":" |"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" \"deny\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}]
+a9:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  };"}]}]
+aa:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"};"}]}]
+ab:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"  cacheScopeKey"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"?:"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" string"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":";"}]]}]
+ac:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"})"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":":"}],["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":" PluginJitiLoader"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" {"}]]}]
+ad:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"  // 按 jitiFilename + cacheScopeKey 缓存 loader 实例"}]}]
+ae:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"  const"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" jitiFilename"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":" ="}],["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":" toSafeImportPath"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"(params.jitiFilename "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"??"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" params.modulePath);"}]]}]
+af:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"  // ...缓存逻辑"}]}]
+b0:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"}"}]}]

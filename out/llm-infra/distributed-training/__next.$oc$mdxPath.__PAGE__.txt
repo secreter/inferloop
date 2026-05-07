@@ -1,0 +1,567 @@
+1:"$Sreact.fragment"
+2:I[55169,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"TOCProvider"]
+3:I[769,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"Sidebar"]
+4:I[47486,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ClientWrapper"]
+9:I[63894,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"HeadingAnchor"]
+7b:I[97367,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"OutletBoundary"]
+7c:"$Sreact.suspense"
+7e:I[83987,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ToggleWordWrapButton"]
+7f:I[40493,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"CopyToClipboard"]
+5:T3546,# 第 11 章 分布式训练基础
+
+> **进阶章节。** 如果你的目标是推理部署和微调（QLoRA 单卡即可），可以先跳过本章。当你需要从零预训练模型或在多卡上做 Full Fine-tuning 时再回来。
+
+前两章我们在单卡上搞定了微调和对齐。但现实中，单卡很快就不够用了：
+
+- 模型太大，一张卡放不下（70B 模型 bf16 需要 140GB）
+- 数据太多，单卡训练太慢
+- 要做 Full Fine-tuning 或预训练，显存和算力都不够
+
+这一章我们讲分布式训练的核心概念：数据并行、模型并行、ZeRO、FSDP，以及底层的网络通信。不追求面面俱到，但确保你理解每种方案在解决什么问题、什么时候该用哪个。
+
+## 11.1 数据并行
+
+### 最简单的分布式策略
+
+数据并行（Data Parallelism, DP）的思路最直观：
+
+1. 每张卡上放一份完整的模型副本
+2. 一个 batch 的数据切成 N 份，每张卡处理一份
+3. 每张卡各自做 forward + backward，算出梯度
+4. 所有卡的梯度做 all-reduce（求平均）
+5. 每张卡用平均梯度更新自己的模型参数
+
+效果等价于在单卡上用 N 倍的 batch size 训练。
+
+### All-Reduce 的通信开销
+
+all-reduce 是数据并行的核心通信操作。假设模型有 $P$ 个参数，每个参数的梯度是 bf16（2 bytes），那每张卡需要发送 $2P$ bytes 的数据。
+
+以 7B 模型为例：
+
+- 梯度大小：7B × 2 bytes = 14 GB
+- 在 ring all-reduce 中，每张卡需要发送和接收约 $2 \times \frac{N-1}{N} \times 14$ GB 的数据
+- 8 卡通过 NVLink（900 GB/s 双向带宽）：通信时间约 **0.05 秒**
+- 8 卡通过 PCIe Gen4（64 GB/s 双向带宽）：通信时间约 **0.8 秒**
+
+如果一个训练 step 的计算时间是 2 秒，那 NVLink 下通信开销可以忽略（2.5%），但 PCIe 下就有 30%+ 的开销了。这就是为什么训练集群都用 NVLink。
+
+### PyTorch DDP
+
+PyTorch 的 DistributedDataParallel（DDP）是数据并行的标准实现：
+
+```python
+import torch
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+
+# 初始化进程组
+dist.init_process_group(backend="nccl")
+local_rank = int(os.environ["LOCAL_RANK"])
+torch.cuda.set_device(local_rank)
+
+# 模型放到对应 GPU
+model = MyModel().to(local_rank)
+model = DDP(model, device_ids=[local_rank])
+
+# 数据用 DistributedSampler 切分
+sampler = torch.utils.data.distributed.DistributedSampler(dataset)
+dataloader = DataLoader(dataset, sampler=sampler, batch_size=8)
+
+# 训练循环和单卡完全一样
+for batch in dataloader:
+    loss = model(batch)
+    loss.backward()
+    optimizer.step()
+    optimizer.zero_grad()
+```
+
+启动方式：
+
+```bash
+torchrun --nproc_per_node=4 train.py
+```
+
+DDP 的优点是简单、通信效率高（梯度计算和通信可以 overlap）。缺点是每张卡都要放一份完整的模型，所以显存没有节省——模型太大就放不下。
+
+完整代码见 `examples/ch11-distributed-training/01_ddp_basic.py`。
+
+## 11.2 模型并行
+
+当模型大到一张卡放不下时，就需要模型并行。
+
+### Tensor Parallelism（张量并行）
+
+Tensor Parallelism（TP）把一个层的矩阵切分到多张卡上。
+
+以一个线性层 $Y = XW$ 为例，$W \in \mathbb{R}^{d \times d}$：
+
+- 把 $W$ 按列切成 $N$ 份：$W = [W_1, W_2, ..., W_N]$
+- 每张卡拿一份 $W_i$，计算 $Y_i = X W_i$
+- 最后把 $Y_i$ 拼起来（或 all-reduce）得到完整的 $Y$
+
+优点：
+- 每层都并行，延迟低
+- 线性扩展显存
+
+缺点：
+- 每层都需要通信（all-reduce 或 all-gather），对带宽要求极高
+- 通常只在同一台机器的 GPU 之间使用（NVLink 连接）
+
+Tensor Parallelism 在推理时（vLLM 的 `--tensor-parallel-size`）比训练时更常见，因为推理对延迟更敏感。
+
+### Pipeline Parallelism（流水线并行）
+
+Pipeline Parallelism（PP）把模型的不同层放到不同卡上：
+
+- GPU 0：Layer 0-7
+- GPU 1：Layer 8-15
+- GPU 2：Layer 16-23
+- GPU 3：Layer 24-31
+
+问题是，朴素的 PP 会导致严重的"气泡"（bubble）：GPU 0 算完 forward 后，要等 GPU 1、2、3 依次算完才能开始 backward。大部分时间 GPU 都在空闲。
+
+解决方案是 **Micro-batching**：把一个 batch 切成多个 micro-batch，形成流水线：
+
+```
+GPU 0: [F1][F2][F3][F4]          [B4][B3][B2][B1]
+GPU 1:     [F1][F2][F3][F4]      [B4][B3][B2][B1]
+GPU 2:         [F1][F2][F3][F4]  [B4][B3][B2][B1]
+GPU 3:             [F1][F2][F3][F4][B4][B3][B2][B1]
+```
+
+这样就把空闲时间（bubble）从 $\frac{N-1}{N}$ 降低到 $\frac{N-1}{N+M-1}$，$M$ 是 micro-batch 的数量。
+
+优点：
+- 通信量小（只在层边界传激活值）
+- 适合跨机器使用
+
+缺点：
+- 不可避免的 bubble 开销
+- 负载均衡难（每层的计算量可能不同）
+
+### 实际选择
+
+大规模训练通常组合使用多种并行策略（称为 3D parallelism）：
+
+- **TP**：同一台机器的 GPU 之间（需要高带宽）
+- **PP**：跨机器（带宽要求低一些）
+- **DP**：在 TP+PP 组的基础上做数据并行
+
+比如用 64 张 GPU 训练一个大模型：
+- 8 张卡为一组做 TP（一台机器内）
+- 2 组做 PP（跨 2 台机器）
+- 4 路 DP（4 份数据并行副本）
+- 总共：8 × 2 × 4 = 64 张卡
+
+## 11.3 ZeRO 优化
+
+### DeepSpeed 的核心贡献
+
+微软的 DeepSpeed 提出了 ZeRO（Zero Redundancy Optimizer），核心洞察是：
+
+> 在数据并行中，每张卡都保存完整的模型参数、梯度和优化器状态，这里有大量冗余。我们可以把这些状态分片（shard）到不同卡上。
+
+### ZeRO 三个 Stage
+
+以 7B 模型、8 卡 DP 为例（每卡单独计算）：
+
+**ZeRO Stage 1：分片优化器状态**
+
+- 模型参数：每张卡 15.2 GB（完整副本）
+- 梯度：每张卡 15.2 GB（完整副本）
+- 优化器状态：每张卡 60.8 / 8 = **7.6 GB**（只存 1/8）
+- 总计：~38 GB / 卡（原来是 ~95 GB）
+
+**ZeRO Stage 2：分片优化器状态 + 梯度**
+
+- 模型参数：每张卡 15.2 GB（完整副本）
+- 梯度：每张卡 15.2 / 8 = **1.9 GB**（只存 1/8）
+- 优化器状态：每张卡 **7.6 GB**（只存 1/8）
+- 总计：~24.7 GB / 卡
+
+**ZeRO Stage 3：分片所有状态**
+
+- 模型参数：每张卡 15.2 / 8 = **1.9 GB**（只存 1/8）
+- 梯度：每张卡 **1.9 GB**
+- 优化器状态：每张卡 **7.6 GB**
+- 总计：~11.4 GB / 卡
+
+显存节省对比（7B，8 卡 DP）：
+
+| Stage | 每卡显存 | 节省比例 |
+|-------|---------|---------|
+| 无 ZeRO | ~95 GB | - |
+| Stage 1 | ~38 GB | 60% |
+| Stage 2 | ~24.7 GB | 74% |
+| Stage 3 | ~11.4 GB | 88% |
+
+### 什么时候用哪个 Stage
+
+**ZeRO Stage 2**：最常用的选择。
+
+- 通信开销和普通 DDP 接近（梯度的 reduce-scatter + all-gather）
+- 显存节省显著
+- 计算效率几乎不受影响
+- 适用场景：模型能在单卡放下，但 optimizer 放不下
+
+**ZeRO Stage 3**：模型本身都放不下时用。
+
+- 需要额外的 all-gather 来获取完整参数（forward 和 backward 前）
+- 通信量是 Stage 2 的约 1.5 倍
+- 计算效率有 10-20% 的损失
+- 适用场景：大模型 Full FT，或者显存非常紧张
+
+实际建议：先试 Stage 2，不够再用 Stage 3。
+
+### DeepSpeed 配置
+
+一个典型的 ZeRO Stage 2 配置：
+
+```json
+{
+  "bf16": {"enabled": true},
+  "zero_optimization": {
+    "stage": 2,
+    "allgather_partitions": true,
+    "allgather_bucket_size": 5e8,
+    "overlap_comm": true,
+    "reduce_scatter": true,
+    "reduce_bucket_size": 5e8,
+    "contiguous_gradients": true
+  },
+  "gradient_accumulation_steps": 4,
+  "gradient_clipping": 1.0,
+  "train_batch_size": "auto",
+  "train_micro_batch_size_per_gpu": "auto"
+}
+```
+
+和 HuggingFace Transformers 集成非常简单——在 TrainingArguments 里指定 deepspeed 配置文件路径即可。
+
+完整配置和代码见 `examples/ch11-distributed-training/03_deepspeed_config.json` 和 `04_deepspeed_train.py`。
+
+## 11.4 FSDP
+
+### PyTorch 原生的 Fully Sharded Data Parallel
+
+FSDP 是 PyTorch 从 1.11 开始原生支持的分片数据并行，思路和 DeepSpeed ZeRO Stage 3 基本一样：
+
+- 把模型参数、梯度、优化器状态都分片
+- forward 时 all-gather 收集完整参数
+- backward 后 reduce-scatter 分发梯度
+- 不需要的参数及时释放（节省显存）
+
+### FSDP vs DeepSpeed ZeRO
+
+| 维度 | FSDP | DeepSpeed ZeRO |
+|-----|------|---------------|
+| 生态 | PyTorch 原生 | 独立库 |
+| 配置 | Python API | JSON 配置文件 |
+| ZeRO Stage | 类似 Stage 3（也支持 Stage 2 行为） | Stage 1/2/3 |
+| CPU Offload | 支持 | 支持 |
+| 混合精度 | 原生支持 | 原生支持 |
+| HF 集成 | 通过 Accelerate | 原生支持 |
+| 社区活跃度 | Meta 主推 | 微软主推 |
+
+实际上两者在大多数场景下性能接近。选择建议：
+
+- 如果你用 HuggingFace 生态，两个都方便用
+- 如果你从零搭训练框架，FSDP 更"原生"
+- 如果需要 ZeRO Stage 1/2 的灵活性，用 DeepSpeed
+- 如果需要 CPU Offload 到极致，DeepSpeed 的 ZeRO-Infinity 更成熟
+
+### FSDP 使用方式
+
+```python
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp import MixedPrecision, ShardingStrategy
+
+# 混合精度策略
+mp_policy = MixedPrecision(
+    param_dtype=torch.bfloat16,
+    reduce_dtype=torch.bfloat16,
+    buffer_dtype=torch.bfloat16,
+)
+
+# 包装模型
+model = FSDP(
+    model,
+    sharding_strategy=ShardingStrategy.FULL_SHARD,  # 类似 ZeRO Stage 3
+    mixed_precision=mp_policy,
+    device_id=torch.cuda.current_device(),
+)
+```
+
+`ShardingStrategy` 的选项：
+
+- `FULL_SHARD`：类似 ZeRO Stage 3，全分片
+- `SHARD_GRAD_OP`：类似 ZeRO Stage 2，只分片梯度和优化器
+- `NO_SHARD`：等同于 DDP，不分片
+
+通过 HuggingFace Accelerate 使用更简单：
+
+```yaml
+# accelerate_config.yaml
+compute_environment: LOCAL_MACHINE
+distributed_type: FSDP
+fsdp_config:
+  fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
+  fsdp_sharding_strategy: FULL_SHARD
+  fsdp_backward_prefetch_policy: BACKWARD_PRE
+  fsdp_state_dict_type: SHARDED_STATE_DICT
+  mixed_precision: bf16
+```
+
+完整代码见 `examples/ch11-distributed-training/02_fsdp_train.py`。
+
+## 11.5 训练集群的网络
+
+分布式训练的瓶颈往往不在 GPU 计算，而在 GPU 之间的通信。
+
+### GPU 间通信技术
+
+**NVLink**：NVIDIA 的高速 GPU 互联。
+
+- NVLink 3.0（A100）：双向 600 GB/s
+- NVLink 4.0（H100）：双向 900 GB/s
+- 通常连接同一台机器内的 GPU
+
+**NVSwitch**：把一台机器内所有 GPU 连成全互联。
+
+- A100 DGX：8 GPU 通过 NVSwitch 全互联，任意两张卡 600 GB/s
+- H100 DGX：8 GPU 全互联，任意两张卡 900 GB/s
+
+**PCIe**：老牌通用接口。
+
+- PCIe Gen4 x16：双向 ~32 GB/s
+- PCIe Gen5 x16：双向 ~64 GB/s
+- 带宽比 NVLink 低一个数量级，不适合 TP
+
+**InfiniBand**：跨机器的高速网络。
+
+- HDR InfiniBand：200 Gbps = 25 GB/s
+- NDR InfiniBand：400 Gbps = 50 GB/s
+- 延迟极低（~1μs），适合大规模集群
+
+**RoCE（RDMA over Converged Ethernet）**：基于以太网的 RDMA。
+
+- 成本比 InfiniBand 低
+- 性能接近，但延迟稍高
+- 很多云厂商用这个
+
+### 通信带宽对训练速度的影响
+
+我们算一个具体例子。假设你在做 7B 模型的 DDP 训练，每步需要 all-reduce 14 GB 的梯度：
+
+| 网络 | 带宽 | 通信时间（8 卡） | 占比（2s/step） |
+|------|-----|--------------|---------------|
+| NVLink 4.0 | 900 GB/s | ~0.03s | 1.5% |
+| NVLink 3.0 | 600 GB/s | ~0.05s | 2.5% |
+| PCIe Gen5 | 64 GB/s | ~0.4s | 17% |
+| InfiniBand NDR | 50 GB/s | ~0.5s | 20% |
+| 25G 以太网 | 3.1 GB/s | ~8s | 80% |
+
+可以看到：
+
+- **机器内**：必须用 NVLink/NVSwitch，PCIe 勉强可以做 DP，不适合 TP
+- **机器间**：至少用 InfiniBand 或高速 RoCE，普通以太网根本跑不动
+
+### 云上的 GPU 集群网络
+
+如果你在云上租 GPU，网络拓扑直接影响训练效率：
+
+**阿里云**：
+
+- GPU 云服务器（ecs.gn7i）：单机 8 卡 A10，NVLink 互联
+- 灵骏智算集群：A100/H100，机器间 RDMA 网络，适合大规模训练
+- PAI 平台封装了分布式训练的细节
+
+**腾讯云**：
+
+- GPU 云服务器（GN10Xp）：单机 8 卡 A100，NVLink 互联
+- 高性能计算集群（HCC）：InfiniBand 互联，适合多机训练
+
+**AWS**：
+
+- p5 实例：8 卡 H100，NVLink + EFA 网络（400 Gbps）
+- p4d 实例：8 卡 A100，NVLink + EFA 网络（400 Gbps）
+
+选择建议：
+
+- 单机 8 卡足够你的任务 → 租一台 8 卡机器就好，不用关心机器间网络
+- 需要多机 → 必须选有高速互联（RDMA/InfiniBand/EFA）的实例类型，否则网络会成为严重瓶颈
+- 做 TP → 只在机器内做（NVLink），跨机器用 DP 或 PP
+
+---
+
+## 小结
+
+| 并行策略 | 解决的问题 | 通信需求 | 典型使用 |
+|---------|----------|---------|---------|
+| 数据并行（DDP） | 训练速度 | 中（梯度同步） | 模型能放一张卡 |
+| ZeRO Stage 2 | 优化器显存 | 中 | 最常用 |
+| ZeRO Stage 3 / FSDP | 模型太大 | 高 | 大模型 Full FT |
+| Tensor Parallelism | 模型太大 | 极高（每层都通信） | 机器内，推理为主 |
+| Pipeline Parallelism | 模型太大 | 低 | 跨机器 |
+
+对于大多数微调场景：
+
+- **7B LoRA**：单卡搞定，不需要分布式
+- **7B Full FT**：2-4 卡 + ZeRO Stage 2
+- **70B LoRA**：2-4 卡 + ZeRO Stage 3
+- **70B Full FT**：16+ 卡 + ZeRO Stage 3 + TP
+- **预训练**：3D parallelism，这超出了本章范围
+
+掌握了 DDP 和 ZeRO，你就能应对大多数实际训练场景了。0:{"rsc":["$","$1","c",{"children":[["$","div",null,{"className":"x:mx-auto x:flex x:max-w-(--nextra-content-width)","children":["$","$L2",null,{"value":[{"value":"11.1 数据并行","id":"111-数据并行","depth":2},{"value":"最简单的分布式策略","id":"最简单的分布式策略","depth":3},{"value":"All-Reduce 的通信开销","id":"all-reduce-的通信开销","depth":3},{"value":"PyTorch DDP","id":"pytorch-ddp","depth":3},{"value":"11.2 模型并行","id":"112-模型并行","depth":2},{"value":"Tensor Parallelism（张量并行）","id":"tensor-parallelism张量并行","depth":3},{"value":"Pipeline Parallelism（流水线并行）","id":"pipeline-parallelism流水线并行","depth":3},{"value":"实际选择","id":"实际选择","depth":3},{"value":"11.3 ZeRO 优化","id":"113-zero-优化","depth":2},{"value":"DeepSpeed 的核心贡献","id":"deepspeed-的核心贡献","depth":3},{"value":"ZeRO 三个 Stage","id":"zero-三个-stage","depth":3},{"value":"什么时候用哪个 Stage","id":"什么时候用哪个-stage","depth":3},{"value":"DeepSpeed 配置","id":"deepspeed-配置","depth":3},{"value":"11.4 FSDP","id":"114-fsdp","depth":2},{"value":"PyTorch 原生的 Fully Sharded Data Parallel","id":"pytorch-原生的-fully-sharded-data-parallel","depth":3},{"value":"FSDP vs DeepSpeed ZeRO","id":"fsdp-vs-deepspeed-zero","depth":3},{"value":"FSDP 使用方式","id":"fsdp-使用方式","depth":3},{"value":"11.5 训练集群的网络","id":"115-训练集群的网络","depth":2},{"value":"GPU 间通信技术","id":"gpu-间通信技术","depth":3},{"value":"通信带宽对训练速度的影响","id":"通信带宽对训练速度的影响","depth":3},{"value":"云上的 GPU 集群网络","id":"云上的-gpu-集群网络","depth":3},{"value":"小结","id":"小结","depth":2}],"children":[["$","$L3",null,{}],["$","$L4",null,{"metadata":{"title":"第 11 章 分布式训练基础","filePath":"content/llm-infra/distributed-training.md","timestamp":1778089813000},"sourceCode":"$5","children":["$L6","$L7"]}]]}]}],null,"$L8"]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"CR_c9URqh-5K47K_DC-c1"}
+6:["$","div",null,{"id":"nextra-skip-nav"}]
+7:["$","main",null,{"data-pagefind-body":true,"children":[["$","script",null,{"type":"application/ld+json","dangerouslySetInnerHTML":{"__html":"{\"@context\":\"https://schema.org\",\"@graph\":[{\"@type\":\"TechArticle\",\"@id\":\"https://inferloop.dev/llm-infra/distributed-training#article\",\"headline\":\"第 11 章 分布式训练基础\",\"description\":\"前两章我们在单卡上搞定了微调和对齐。但现实中，单卡很快就不够用了：\",\"inLanguage\":\"zh-CN\",\"author\":{\"@type\":\"Person\",\"name\":\"递归客\"},\"publisher\":{\"@type\":\"Organization\",\"name\":\"InferLoop\",\"url\":\"https://inferloop.dev\"},\"isPartOf\":{\"@type\":\"Book\",\"name\":\"LLM Infra 工程实战\",\"url\":\"https://inferloop.dev/llm-infra\",\"image\":\"https://images.redream.cn/images/Xmle0j.png\"},\"mainEntityOfPage\":{\"@type\":\"WebPage\",\"@id\":\"https://inferloop.dev/llm-infra/distributed-training\"},\"image\":\"https://images.redream.cn/images/Xmle0j.png\"},{\"@type\":\"BreadcrumbList\",\"itemListElement\":[{\"@type\":\"ListItem\",\"position\":1,\"name\":\"首页\",\"item\":\"https://inferloop.dev\"},{\"@type\":\"ListItem\",\"position\":2,\"name\":\"LLM Infra 工程实战\",\"item\":\"https://inferloop.dev/llm-infra\"},{\"@type\":\"ListItem\",\"position\":3,\"name\":\"第 11 章 分布式训练基础\",\"item\":\"https://inferloop.dev/llm-infra/distributed-training\"}]}]}"}}],[["$","h1",null,{"className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-bold x:mt-2 x:text-4xl","children":["第 11 章 分布式训练基础","$undefined"]}],"\n",["$","blockquote",null,{"className":"x:not-first:mt-[1.25em] x:border-gray-300 x:italic x:text-gray-700 x:dark:border-gray-700 x:dark:text-gray-400 x:border-s-2 x:ps-[1.5em]","children":["\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"进阶章节。"}]," 如果你的目标是推理部署和微调（QLoRA 单卡即可），可以先跳过本章。当你需要从零预训练模型或在多卡上做 Full Fine-tuning 时再回来。"]}],"\n"]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"前两章我们在单卡上搞定了微调和对齐。但现实中，单卡很快就不够用了："}],"\n",["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"模型太大，一张卡放不下（70B 模型 bf16 需要 140GB）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"数据太多，单卡训练太慢"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"要做 Full Fine-tuning 或预训练，显存和算力都不够"}],"\n"]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这一章我们讲分布式训练的核心概念：数据并行、模型并行、ZeRO、FSDP，以及底层的网络通信。不追求面面俱到，但确保你理解每种方案在解决什么问题、什么时候该用哪个。"}],"\n",["$","h2",null,{"id":"111-数据并行","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["11.1 数据并行",["$","$L9",null,{"id":"111-数据并行"}]]}],"\n",["$","h3",null,{"id":"最简单的分布式策略","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["最简单的分布式策略",["$","$L9",null,{"id":"最简单的分布式策略"}]]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"数据并行（Data Parallelism, DP）的思路最直观："}],"\n",["$","ol",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-decimal x:ms-6","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"每张卡上放一份完整的模型副本"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"一个 batch 的数据切成 N 份，每张卡处理一份"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"每张卡各自做 forward + backward，算出梯度"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"所有卡的梯度做 all-reduce（求平均）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"每张卡用平均梯度更新自己的模型参数"}],"\n"]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"效果等价于在单卡上用 N 倍的 batch size 训练。"}],"\n",["$","h3",null,{"id":"all-reduce-的通信开销","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["All-Reduce 的通信开销","$La"]}],"\n","$Lb","\n","$Lc","\n","$Ld","\n","$Le","\n","$Lf","\n","$L10","\n","$L11","\n","$L12","\n","$L13","\n","$L14","\n","$L15","\n","$L16","\n","$L17","\n","$L18","\n","$L19","\n","$L1a","\n","$L1b","\n","$L1c","\n","$L1d","\n","$L1e","\n","$L1f","\n","$L20","\n","$L21","\n","$L22","\n","$L23","\n","$L24","\n","$L25","\n","$L26","\n","$L27","\n","$L28","\n","$L29","\n","$L2a","\n","$L2b","\n","$L2c","\n","$L2d","\n","$L2e","\n","$L2f","\n","$L30","\n","$L31","\n","$L32","\n","$L33","\n","$L34","\n","$L35","\n","$L36","\n","$L37","\n","$L38","\n","$L39","\n","$L3a","\n","$L3b","\n","$L3c","\n","$L3d","\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n","$L3e","\n","$L3f","\n","$L40","\n","$L41","\n","$L42","\n","$L43","\n","$L44","\n","$L45","\n","$L46","\n","$L47","\n","$L48","\n","$L49","\n","$L4a","\n","$L4b","\n","$L4c","\n","$L4d","\n","$L4e","\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n","$L4f","\n","$L50","\n","$L51","\n","$L52","\n","$L53","\n","$L54","\n","$L55","\n","$L56","\n","$L57","\n","$L58","\n","$L59","\n","$L5a","\n","$L5b","\n","$L5c","\n","$L5d","\n","$L5e","\n","$L5f","\n","$L60","\n","$L61","\n","$L62","\n","$L63","\n","$L64","\n","$L65","\n","$L66","\n","$L67","\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n","$L68","\n","$L69","\n","$L6a","\n","$L6b","\n","$L6c","\n","$L6d","\n","$L6e","\n","$L6f","\n","$L70","\n","$L71","\n","$L72","\n","$L73","\n","$L74","\n","$L75","\n","$L76","\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n","$L77","\n","$L78","\n","$L79","\n","$L7a"]]}]
+8:["$","$L7b",null,{"children":["$","$7c",null,{"name":"Next.MetadataOutlet","children":"$@7d"}]}]
+a:["$","$L9",null,{"id":"all-reduce-的通信开销"}]
+b:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"all-reduce 是数据并行的核心通信操作。假设模型有 $P$ 个参数，每个参数的梯度是 bf16（2 bytes），那每张卡需要发送 $2P$ bytes 的数据。"}]
+c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"以 7B 模型为例："}]
+d:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"梯度大小：7B × 2 bytes = 14 GB"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"在 ring all-reduce 中，每张卡需要发送和接收约 $2 \\times \\frac{N-1}{N} \\times 14$ GB 的数据"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":["8 卡通过 NVLink（900 GB/s 双向带宽）：通信时间约 ",["$","strong",null,{"children":"0.05 秒"}]]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":["8 卡通过 PCIe Gen4（64 GB/s 双向带宽）：通信时间约 ",["$","strong",null,{"children":"0.8 秒"}]]}],"\n"]}]
+e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"如果一个训练 step 的计算时间是 2 秒，那 NVLink 下通信开销可以忽略（2.5%），但 PCIe 下就有 30%+ 的开销了。这就是为什么训练集群都用 NVLink。"}]
+f:["$","h3",null,{"id":"pytorch-ddp","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["PyTorch DDP",["$","$L9",null,{"id":"pytorch-ddp"}]]}]
+10:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"PyTorch 的 DistributedDataParallel（DDP）是数据并行的标准实现："}]
+11:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L7e",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L7f",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"import"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" torch"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"import"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" torch.distributed "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"as"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" dist"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"from"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" torch.nn.parallel "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"import"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" DistributedDataParallel "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"as"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" DDP"}]]}],"\n",["$","span",null,{"children":" "}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# 初始化进程组"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"dist.init_process_group("}],["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"backend"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"="}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"nccl\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":")"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"local_rank "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"="}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" int"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"(os.environ["}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"LOCAL_RANK\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"])"}]]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"torch.cuda.set_device(local_rank)"}]}],"\n",["$","span",null,{"children":" "}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# 模型放到对应 GPU"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"model "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"="}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" MyModel().to(local_rank)"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"model "}],"$L80","$L81","$L82","$L83","$L84"]}],"\n","$L85","\n","$L86","\n","$L87","\n","$L88","\n","$L89","\n","$L8a","\n","$L8b","\n","$L8c","\n","$L8d","\n","$L8e","\n","$L8f"]}]]}]]}]
+12:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"启动方式："}]
+13:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L7e",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L7f",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#6F42C1","--shiki-dark":"#B392F0"},"children":"torchrun"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" --nproc_per_node=4"}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":" train.py"}]]}]}]]}]]}]
+14:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"DDP 的优点是简单、通信效率高（梯度计算和通信可以 overlap）。缺点是每张卡都要放一份完整的模型，所以显存没有节省——模型太大就放不下。"}]
+15:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["完整代码见 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"examples/ch11-distributed-training/01_ddp_basic.py"}],"。"]}]
+16:["$","h2",null,{"id":"112-模型并行","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["11.2 模型并行",["$","$L9",null,{"id":"112-模型并行"}]]}]
+17:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"当模型大到一张卡放不下时，就需要模型并行。"}]
+18:["$","h3",null,{"id":"tensor-parallelism张量并行","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["Tensor Parallelism（张量并行）",["$","$L9",null,{"id":"tensor-parallelism张量并行"}]]}]
+19:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Tensor Parallelism（TP）把一个层的矩阵切分到多张卡上。"}]
+1a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"以一个线性层 $Y = XW$ 为例，$W \\in \\mathbb{R}^{d \\times d}$："}]
+1b:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"把 $W$ 按列切成 $N$ 份：$W = [W_1, W_2, …, W_N]$"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"每张卡拿一份 $W_i$，计算 $Y_i = X W_i$"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"最后把 $Y_i$ 拼起来（或 all-reduce）得到完整的 $Y$"}],"\n"]}]
+1c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"优点："}]
+1d:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"每层都并行，延迟低"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"线性扩展显存"}],"\n"]}]
+1e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"缺点："}]
+1f:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"每层都需要通信（all-reduce 或 all-gather），对带宽要求极高"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"通常只在同一台机器的 GPU 之间使用（NVLink 连接）"}],"\n"]}]
+20:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["Tensor Parallelism 在推理时（vLLM 的 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"--tensor-parallel-size"}],"）比训练时更常见，因为推理对延迟更敏感。"]}]
+21:["$","h3",null,{"id":"pipeline-parallelism流水线并行","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["Pipeline Parallelism（流水线并行）",["$","$L9",null,{"id":"pipeline-parallelism流水线并行"}]]}]
+22:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"Pipeline Parallelism（PP）把模型的不同层放到不同卡上："}]
+23:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"GPU 0：Layer 0-7"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"GPU 1：Layer 8-15"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"GPU 2：Layer 16-23"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"GPU 3：Layer 24-31"}],"\n"]}]
+24:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"问题是，朴素的 PP 会导致严重的”气泡”（bubble）：GPU 0 算完 forward 后，要等 GPU 1、2、3 依次算完才能开始 backward。大部分时间 GPU 都在空闲。"}]
+25:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["解决方案是 ",["$","strong",null,{"children":"Micro-batching"}],"：把一个 batch 切成多个 micro-batch，形成流水线："]}]
+26:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L7e",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L7f",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"children":"GPU 0: [F1][F2][F3][F4]          [B4][B3][B2][B1]"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"GPU 1:     [F1][F2][F3][F4]      [B4][B3][B2][B1]"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"GPU 2:         [F1][F2][F3][F4]  [B4][B3][B2][B1]"}]}],"\n",["$","span",null,{"children":["$","span",null,{"children":"GPU 3:             [F1][F2][F3][F4][B4][B3][B2][B1]"}]}]]}]]}]]}]
+27:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"这样就把空闲时间（bubble）从 $\\frac{N-1}{N}$ 降低到 $\\frac{N-1}{N+M-1}$，$M$ 是 micro-batch 的数量。"}]
+28:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"优点："}]
+29:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"通信量小（只在层边界传激活值）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"适合跨机器使用"}],"\n"]}]
+2a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"缺点："}]
+2b:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"不可避免的 bubble 开销"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"负载均衡难（每层的计算量可能不同）"}],"\n"]}]
+2c:["$","h3",null,{"id":"实际选择","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["实际选择",["$","$L9",null,{"id":"实际选择"}]]}]
+2d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"大规模训练通常组合使用多种并行策略（称为 3D parallelism）："}]
+2e:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"TP"}],"：同一台机器的 GPU 之间（需要高带宽）"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"PP"}],"：跨机器（带宽要求低一些）"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"DP"}],"：在 TP+PP 组的基础上做数据并行"]}],"\n"]}]
+2f:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"比如用 64 张 GPU 训练一个大模型："}]
+30:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"8 张卡为一组做 TP（一台机器内）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"2 组做 PP（跨 2 台机器）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"4 路 DP（4 份数据并行副本）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"总共：8 × 2 × 4 = 64 张卡"}],"\n"]}]
+31:["$","h2",null,{"id":"113-zero-优化","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["11.3 ZeRO 优化",["$","$L9",null,{"id":"113-zero-优化"}]]}]
+32:["$","h3",null,{"id":"deepspeed-的核心贡献","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["DeepSpeed 的核心贡献",["$","$L9",null,{"id":"deepspeed-的核心贡献"}]]}]
+33:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"微软的 DeepSpeed 提出了 ZeRO（Zero Redundancy Optimizer），核心洞察是："}]
+34:["$","blockquote",null,{"className":"x:not-first:mt-[1.25em] x:border-gray-300 x:italic x:text-gray-700 x:dark:border-gray-700 x:dark:text-gray-400 x:border-s-2 x:ps-[1.5em]","children":["\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"在数据并行中，每张卡都保存完整的模型参数、梯度和优化器状态，这里有大量冗余。我们可以把这些状态分片（shard）到不同卡上。"}],"\n"]}]
+35:["$","h3",null,{"id":"zero-三个-stage","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["ZeRO 三个 Stage",["$","$L9",null,{"id":"zero-三个-stage"}]]}]
+36:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"以 7B 模型、8 卡 DP 为例（每卡单独计算）："}]
+37:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"ZeRO Stage 1：分片优化器状态"}]}]
+38:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"模型参数：每张卡 15.2 GB（完整副本）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"梯度：每张卡 15.2 GB（完整副本）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":["优化器状态：每张卡 60.8 / 8 = ",["$","strong",null,{"children":"7.6 GB"}],"（只存 1/8）"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"总计：~38 GB / 卡（原来是 ~95 GB）"}],"\n"]}]
+39:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"ZeRO Stage 2：分片优化器状态 + 梯度"}]}]
+3a:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"模型参数：每张卡 15.2 GB（完整副本）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":["梯度：每张卡 15.2 / 8 = ",["$","strong",null,{"children":"1.9 GB"}],"（只存 1/8）"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":["优化器状态：每张卡 ",["$","strong",null,{"children":"7.6 GB"}],"（只存 1/8）"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"总计：~24.7 GB / 卡"}],"\n"]}]
+3b:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"ZeRO Stage 3：分片所有状态"}]}]
+3c:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":["模型参数：每张卡 15.2 / 8 = ",["$","strong",null,{"children":"1.9 GB"}],"（只存 1/8）"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":["梯度：每张卡 ",["$","strong",null,{"children":"1.9 GB"}]]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":["优化器状态：每张卡 ",["$","strong",null,{"children":"7.6 GB"}]]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"总计：~11.4 GB / 卡"}],"\n"]}]
+3d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"显存节省对比（7B，8 卡 DP）："}]
+3e:["$","table",null,{"className":"x:block x:overflow-x-auto nextra-scrollbar x:not-first:mt-[1.25em] x:p-0","children":[["$","thead",null,{"children":["$","tr",null,{"children":[["$","th",null,{"children":"Stage","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"每卡显存","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"节省比例","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]}],["$","tbody",null,{"children":[["$","tr",null,{"children":[["$","td",null,{"children":"无 ZeRO","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"~95 GB","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"-","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"Stage 1","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"~38 GB","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"60%","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"Stage 2","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"~24.7 GB","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"74%","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"Stage 3","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"~11.4 GB","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"88%","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]]}]]}]
+3f:["$","h3",null,{"id":"什么时候用哪个-stage","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["什么时候用哪个 Stage",["$","$L9",null,{"id":"什么时候用哪个-stage"}]]}]
+40:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"ZeRO Stage 2"}],"：最常用的选择。"]}]
+41:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"通信开销和普通 DDP 接近（梯度的 reduce-scatter + all-gather）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"显存节省显著"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"计算效率几乎不受影响"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"适用场景：模型能在单卡放下，但 optimizer 放不下"}],"\n"]}]
+42:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"ZeRO Stage 3"}],"：模型本身都放不下时用。"]}]
+43:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"需要额外的 all-gather 来获取完整参数（forward 和 backward 前）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"通信量是 Stage 2 的约 1.5 倍"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"计算效率有 10-20% 的损失"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"适用场景：大模型 Full FT，或者显存非常紧张"}],"\n"]}]
+44:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"实际建议：先试 Stage 2，不够再用 Stage 3。"}]
+45:["$","h3",null,{"id":"deepspeed-配置","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["DeepSpeed 配置",["$","$L9",null,{"id":"deepspeed-配置"}]]}]
+46:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"一个典型的 ZeRO Stage 2 配置："}]
+47:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L7e",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L7f",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"{"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"  \"bf16\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": {"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"\"enabled\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"true"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"},"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"  \"zero_optimization\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": {"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"stage\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"2"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"allgather_partitions\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"true"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"allgather_bucket_size\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"5e8"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"overlap_comm\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"true"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"reduce_scatter\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"true"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"reduce_bucket_size\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"5e8"}],"$L90"]}],"\n","$L91","\n","$L92","\n","$L93","\n","$L94","\n","$L95","\n","$L96","\n","$L97"]}]]}]]}]
+48:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"和 HuggingFace Transformers 集成非常简单——在 TrainingArguments 里指定 deepspeed 配置文件路径即可。"}]
+49:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["完整配置和代码见 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"examples/ch11-distributed-training/03_deepspeed_config.json"}]," 和 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"04_deepspeed_train.py"}],"。"]}]
+4a:["$","h2",null,{"id":"114-fsdp","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["11.4 FSDP",["$","$L9",null,{"id":"114-fsdp"}]]}]
+4b:["$","h3",null,{"id":"pytorch-原生的-fully-sharded-data-parallel","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["PyTorch 原生的 Fully Sharded Data Parallel",["$","$L9",null,{"id":"pytorch-原生的-fully-sharded-data-parallel"}]]}]
+4c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"FSDP 是 PyTorch 从 1.11 开始原生支持的分片数据并行，思路和 DeepSpeed ZeRO Stage 3 基本一样："}]
+4d:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"把模型参数、梯度、优化器状态都分片"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"forward 时 all-gather 收集完整参数"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"backward 后 reduce-scatter 分发梯度"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"不需要的参数及时释放（节省显存）"}],"\n"]}]
+4e:["$","h3",null,{"id":"fsdp-vs-deepspeed-zero","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["FSDP vs DeepSpeed ZeRO",["$","$L9",null,{"id":"fsdp-vs-deepspeed-zero"}]]}]
+4f:["$","table",null,{"className":"x:block x:overflow-x-auto nextra-scrollbar x:not-first:mt-[1.25em] x:p-0","children":[["$","thead",null,{"children":["$","tr",null,{"children":[["$","th",null,{"children":"维度","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"FSDP","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"DeepSpeed ZeRO","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]}],["$","tbody",null,{"children":[["$","tr",null,{"children":[["$","td",null,{"children":"生态","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"PyTorch 原生","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"独立库","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"配置","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"Python API","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"JSON 配置文件","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"ZeRO Stage","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"类似 Stage 3（也支持 Stage 2 行为）","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"Stage 1/2/3","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"CPU Offload","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"支持","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"支持","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"混合精度","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"原生支持","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"原生支持","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"HF 集成","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"通过 Accelerate","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"原生支持","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],"$L98"]}]]}]
+50:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"实际上两者在大多数场景下性能接近。选择建议："}]
+51:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"如果你用 HuggingFace 生态，两个都方便用"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"如果你从零搭训练框架，FSDP 更”原生”"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"如果需要 ZeRO Stage 1/2 的灵活性，用 DeepSpeed"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"如果需要 CPU Offload 到极致，DeepSpeed 的 ZeRO-Infinity 更成熟"}],"\n"]}]
+52:["$","h3",null,{"id":"fsdp-使用方式","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["FSDP 使用方式",["$","$L9",null,{"id":"fsdp-使用方式"}]]}]
+53:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L7e",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L7f",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"from"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" torch.distributed.fsdp "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"import"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" FullyShardedDataParallel "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"as"}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":" FSDP"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"from"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" torch.distributed.fsdp "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"import"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" MixedPrecision, ShardingStrategy"}]]}],"\n",["$","span",null,{"children":" "}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# 混合精度策略"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"mp_policy "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"="}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" MixedPrecision("}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"    param_dtype"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"="}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"torch.bfloat16,"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"    reduce_dtype"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"="}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"torch.bfloat16,"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"    buffer_dtype"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"="}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"torch.bfloat16,"}]]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":")"}]}],"\n",["$","span",null,{"children":" "}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# 包装模型"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"model "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"="}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" FSDP("}]]}],"\n",["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"    model,"}]}],"\n",["$","span",null,{"children":["$L99","$L9a","$L9b","$L9c","$L9d","$L9e"]}],"\n","$L9f","\n","$La0","\n","$La1"]}]]}]]}]
+54:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","code",null,{"className":"nextra-code","dir":"ltr","children":"ShardingStrategy"}]," 的选项："]}]
+55:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","code",null,{"className":"nextra-code","dir":"ltr","children":"FULL_SHARD"}],"：类似 ZeRO Stage 3，全分片"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","code",null,{"className":"nextra-code","dir":"ltr","children":"SHARD_GRAD_OP"}],"：类似 ZeRO Stage 2，只分片梯度和优化器"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","code",null,{"className":"nextra-code","dir":"ltr","children":"NO_SHARD"}],"：等同于 DDP，不分片"]}],"\n"]}]
+56:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"通过 HuggingFace Accelerate 使用更简单："}]
+57:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L7e",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L7f",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":[["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# accelerate_config.yaml"}]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"compute_environment"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"LOCAL_MACHINE"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"distributed_type"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"FSDP"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"fsdp_config"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":":"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"  fsdp_auto_wrap_policy"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"TRANSFORMER_BASED_WRAP"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"  fsdp_sharding_strategy"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"FULL_SHARD"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"  fsdp_backward_prefetch_policy"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"BACKWARD_PRE"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"  fsdp_state_dict_type"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"SHARDED_STATE_DICT"}]]}],"\n",["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#22863A","--shiki-dark":"#85E89D"},"children":"  mixed_precision"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"bf16"}]]}]]}]]}]]}]
+58:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["完整代码见 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"examples/ch11-distributed-training/02_fsdp_train.py"}],"。"]}]
+59:["$","h2",null,{"id":"115-训练集群的网络","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["11.5 训练集群的网络",["$","$L9",null,{"id":"115-训练集群的网络"}]]}]
+5a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"分布式训练的瓶颈往往不在 GPU 计算，而在 GPU 之间的通信。"}]
+5b:["$","h3",null,{"id":"gpu-间通信技术","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["GPU 间通信技术",["$","$L9",null,{"id":"gpu-间通信技术"}]]}]
+5c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"NVLink"}],"：NVIDIA 的高速 GPU 互联。"]}]
+5d:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"NVLink 3.0（A100）：双向 600 GB/s"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"NVLink 4.0（H100）：双向 900 GB/s"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"通常连接同一台机器内的 GPU"}],"\n"]}]
+5e:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"NVSwitch"}],"：把一台机器内所有 GPU 连成全互联。"]}]
+5f:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"A100 DGX：8 GPU 通过 NVSwitch 全互联，任意两张卡 600 GB/s"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"H100 DGX：8 GPU 全互联，任意两张卡 900 GB/s"}],"\n"]}]
+60:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"PCIe"}],"：老牌通用接口。"]}]
+61:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"PCIe Gen4 x16：双向 ~32 GB/s"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"PCIe Gen5 x16：双向 ~64 GB/s"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"带宽比 NVLink 低一个数量级，不适合 TP"}],"\n"]}]
+62:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"InfiniBand"}],"：跨机器的高速网络。"]}]
+63:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"HDR InfiniBand：200 Gbps = 25 GB/s"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"NDR InfiniBand：400 Gbps = 50 GB/s"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"延迟极低（~1μs），适合大规模集群"}],"\n"]}]
+64:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"RoCE（RDMA over Converged Ethernet）"}],"：基于以太网的 RDMA。"]}]
+65:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"成本比 InfiniBand 低"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"性能接近，但延迟稍高"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"很多云厂商用这个"}],"\n"]}]
+66:["$","h3",null,{"id":"通信带宽对训练速度的影响","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["通信带宽对训练速度的影响",["$","$L9",null,{"id":"通信带宽对训练速度的影响"}]]}]
+67:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"我们算一个具体例子。假设你在做 7B 模型的 DDP 训练，每步需要 all-reduce 14 GB 的梯度："}]
+68:["$","table",null,{"className":"x:block x:overflow-x-auto nextra-scrollbar x:not-first:mt-[1.25em] x:p-0","children":[["$","thead",null,{"children":["$","tr",null,{"children":[["$","th",null,{"children":"网络","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"带宽","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"通信时间（8 卡）","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"占比（2s/step）","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]}],["$","tbody",null,{"children":[["$","tr",null,{"children":[["$","td",null,{"children":"NVLink 4.0","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"900 GB/s","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"~0.03s","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"1.5%","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"NVLink 3.0","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"600 GB/s","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"~0.05s","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"2.5%","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"PCIe Gen5","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"64 GB/s","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"~0.4s","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"17%","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"InfiniBand NDR","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"50 GB/s","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"~0.5s","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"20%","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"25G 以太网","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"3.1 GB/s","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"~8s","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"80%","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]]}]]}]
+69:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"可以看到："}]
+6a:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"机器内"}],"：必须用 NVLink/NVSwitch，PCIe 勉强可以做 DP，不适合 TP"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"机器间"}],"：至少用 InfiniBand 或高速 RoCE，普通以太网根本跑不动"]}],"\n"]}]
+6b:["$","h3",null,{"id":"云上的-gpu-集群网络","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-8 x:text-2xl","children":["云上的 GPU 集群网络",["$","$L9",null,{"id":"云上的-gpu-集群网络"}]]}]
+6c:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"如果你在云上租 GPU，网络拓扑直接影响训练效率："}]
+6d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"阿里云"}],"："]}]
+6e:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"GPU 云服务器（ecs.gn7i）：单机 8 卡 A10，NVLink 互联"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"灵骏智算集群：A100/H100，机器间 RDMA 网络，适合大规模训练"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"PAI 平台封装了分布式训练的细节"}],"\n"]}]
+6f:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"腾讯云"}],"："]}]
+70:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"GPU 云服务器（GN10Xp）：单机 8 卡 A100，NVLink 互联"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"高性能计算集群（HCC）：InfiniBand 互联，适合多机训练"}],"\n"]}]
+71:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":[["$","strong",null,{"children":"AWS"}],"："]}]
+72:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"p5 实例：8 卡 H100，NVLink + EFA 网络（400 Gbps）"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"p4d 实例：8 卡 A100，NVLink + EFA 网络（400 Gbps）"}],"\n"]}]
+73:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"选择建议："}]
+74:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"单机 8 卡足够你的任务 → 租一台 8 卡机器就好，不用关心机器间网络"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"需要多机 → 必须选有高速互联（RDMA/InfiniBand/EFA）的实例类型，否则网络会成为严重瓶颈"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"做 TP → 只在机器内做（NVLink），跨机器用 DP 或 PP"}],"\n"]}]
+75:["$","hr",null,{"className":"x:my-[2em] nextra-border"}]
+76:["$","h2",null,{"id":"小结","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["小结",["$","$L9",null,{"id":"小结"}]]}]
+77:["$","table",null,{"className":"x:block x:overflow-x-auto nextra-scrollbar x:not-first:mt-[1.25em] x:p-0","children":[["$","thead",null,{"children":["$","tr",null,{"children":[["$","th",null,{"children":"并行策略","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"解决的问题","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"通信需求","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}],["$","th",null,{"children":"典型使用","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:font-semibold x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]}],["$","tbody",null,{"children":[["$","tr",null,{"children":[["$","td",null,{"children":"数据并行（DDP）","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"训练速度","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"中（梯度同步）","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"模型能放一张卡","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"ZeRO Stage 2","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"优化器显存","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"中","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"最常用","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"ZeRO Stage 3 / FSDP","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"模型太大","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"高","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"大模型 Full FT","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"Tensor Parallelism","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"模型太大","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"极高（每层都通信）","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"机器内，推理为主","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}],["$","tr",null,{"children":[["$","td",null,{"children":"Pipeline Parallelism","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"模型太大","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"低","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"跨机器","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]]}]]}]
+78:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"对于大多数微调场景："}]
+79:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"7B LoRA"}],"：单卡搞定，不需要分布式"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"7B Full FT"}],"：2-4 卡 + ZeRO Stage 2"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"70B LoRA"}],"：2-4 卡 + ZeRO Stage 3"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"70B Full FT"}],"：16+ 卡 + ZeRO Stage 3 + TP"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"预训练"}],"：3D parallelism，这超出了本章范围"]}],"\n"]}]
+7a:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"掌握了 DDP 和 ZeRO，你就能应对大多数实际训练场景了。"}]
+7d:null
+80:["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"="}]
+81:["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" DDP(model, "}]
+82:["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"device_ids"}]
+83:["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"="}]
+84:["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"[local_rank])"}]
+85:["$","span",null,{"children":" "}]
+86:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# 数据用 DistributedSampler 切分"}]}]
+87:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"sampler "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"="}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" torch.utils.data.distributed.DistributedSampler(dataset)"}]]}]
+88:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"dataloader "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"="}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" DataLoader(dataset, "}],["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"sampler"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"="}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"sampler, "}],["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"batch_size"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"="}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"8"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":")"}]]}]
+89:["$","span",null,{"children":" "}]
+8a:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# 训练循环和单卡完全一样"}]}]
+8b:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"for"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" batch "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"in"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" dataloader:"}]]}]
+8c:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"    loss "}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"="}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" model(batch)"}]]}]
+8d:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"    loss.backward()"}]}]
+8e:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"    optimizer.step()"}]}]
+8f:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"    optimizer.zero_grad()"}]}]
+90:["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]
+91:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"    \"contiguous_gradients\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"true"}]]}]
+92:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"  },"}]}]
+93:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"  \"gradient_accumulation_steps\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"4"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}]
+94:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"  \"gradient_clipping\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"1.0"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}]
+95:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"  \"train_batch_size\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"auto\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":","}]]}]
+96:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"  \"train_micro_batch_size_per_gpu\""}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":": "}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"auto\""}]]}]
+97:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"}"}]}]
+98:["$","tr",null,{"children":[["$","td",null,{"children":"社区活跃度","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"Meta 主推","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}],["$","td",null,{"children":"微软主推","className":"x:m-0 x:border x:border-gray-300 x:px-4 x:py-2 x:dark:border-gray-600"}]],"className":"x:m-0 x:border-t x:border-gray-300 x:p-0 x:dark:border-gray-600 x:even:bg-gray-100 x:even:dark:bg-gray-600/20"}]
+99:["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"    sharding_strategy"}]
+9a:["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"="}]
+9b:["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"ShardingStrategy."}]
+9c:["$","span",null,{"style":{"--shiki-light":"#005CC5","--shiki-dark":"#79B8FF"},"children":"FULL_SHARD"}]
+9d:["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":",  "}]
+9e:["$","span",null,{"style":{"--shiki-light":"#6A737D","--shiki-dark":"#6A737D"},"children":"# 类似 ZeRO Stage 3"}]
+9f:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"    mixed_precision"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"="}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"mp_policy,"}]]}]
+a0:["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#E36209","--shiki-dark":"#FFAB70"},"children":"    device_id"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"="}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":"torch.cuda.current_device(),"}]]}]
+a1:["$","span",null,{"children":["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":")"}]}]

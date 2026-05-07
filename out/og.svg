@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0e1116;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0d1a12;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#16a34a;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#4ade80;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="630" fill="url(#bg)" />
+
+  <!-- Grid pattern -->
+  <g opacity="0.04" stroke="#ffffff" stroke-width="1">
+    <line x1="0" y1="60" x2="1200" y2="60" />
+    <line x1="0" y1="120" x2="1200" y2="120" />
+    <line x1="0" y1="180" x2="1200" y2="180" />
+    <line x1="0" y1="240" x2="1200" y2="240" />
+    <line x1="0" y1="300" x2="1200" y2="300" />
+    <line x1="0" y1="360" x2="1200" y2="360" />
+    <line x1="0" y1="420" x2="1200" y2="420" />
+    <line x1="0" y1="480" x2="1200" y2="480" />
+    <line x1="0" y1="540" x2="1200" y2="540" />
+    <line x1="0" y1="600" x2="1200" y2="600" />
+    <line x1="120" y1="0" x2="120" y2="630" />
+    <line x1="240" y1="0" x2="240" y2="630" />
+    <line x1="360" y1="0" x2="360" y2="630" />
+    <line x1="480" y1="0" x2="480" y2="630" />
+    <line x1="600" y1="0" x2="600" y2="630" />
+    <line x1="720" y1="0" x2="720" y2="630" />
+    <line x1="840" y1="0" x2="840" y2="630" />
+    <line x1="960" y1="0" x2="960" y2="630" />
+    <line x1="1080" y1="0" x2="1080" y2="630" />
+  </g>
+
+  <!-- Left accent bar -->
+  <rect x="80" y="160" width="4" height="310" fill="url(#accent)" rx="2" />
+
+  <!-- Logo mark -->
+  <text x="110" y="230" font-family="'Courier New', monospace" font-size="72" font-weight="700" fill="#4ade80">❯_</text>
+
+  <!-- Site name -->
+  <text x="110" y="320" font-family="'Courier New', monospace" font-size="80" font-weight="700" fill="#ffffff" letter-spacing="-2">inferloop</text>
+
+  <!-- Tagline -->
+  <text x="112" y="375" font-family="-apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="28" fill="#86efac" opacity="0.9">工程师写给工程师的 AI Infra &amp; Agent 工程</text>
+
+  <!-- Description -->
+  <text x="112" y="425" font-family="-apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="22" fill="#6b7280">深度内容 · 可运行代码 · 独立上手干活</text>
+
+  <!-- Books count -->
+  <rect x="112" y="455" width="200" height="44" rx="8" fill="#16a34a" opacity="0.15" />
+  <text x="132" y="484" font-family="-apple-system, 'PingFang SC', sans-serif" font-size="20" fill="#4ade80">5 本书 · 86 章</text>
+
+  <rect x="328" y="455" width="230" height="44" rx="8" fill="#16a34a" opacity="0.15" />
+  <text x="348" y="484" font-family="-apple-system, 'PingFang SC', sans-serif" font-size="20" fill="#4ade80">CC BY-NC-SA 4.0</text>
+
+  <!-- Domain -->
+  <text x="1080" y="580" font-family="'Courier New', monospace" font-size="22" fill="#4b5563" text-anchor="end">inferloop.dev</text>
+
+  <!-- Slogan bottom right -->
+  <text x="1080" y="555" font-family="'Courier New', monospace" font-size="18" fill="#374151" text-anchor="end">Loop to the top.</text>
+</svg>

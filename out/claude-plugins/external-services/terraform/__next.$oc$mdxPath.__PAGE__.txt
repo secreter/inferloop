@@ -1,0 +1,81 @@
+1:"$Sreact.fragment"
+2:I[55169,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"TOCProvider"]
+3:I[769,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"Sidebar"]
+4:I[47486,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ClientWrapper"]
+7:I[63894,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"HeadingAnchor"]
+1b:I[83987,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"ToggleWordWrapButton"]
+1c:I[40493,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"CopyToClipboard"]
+1d:I[97367,["/_next/static/chunks/0o09dxusw20i2.js","/_next/static/chunks/0_cmow52-d2v5.js","/_next/static/chunks/0jhowrqu_95sz.js","/_next/static/chunks/15p2csp2y7.z9.js","/_next/static/chunks/0n4z.7yu76je-.js"],"OutletBoundary"]
+1e:"$Sreact.suspense"
+5:T7aa,# 6.7 Terraform
+
+## 定位
+
+HashiCorp 官方的 Terraform MCP 服务器，辅助 Infrastructure as Code 开发。查文档、校验配置、与 Terraform Cloud/Enterprise 交互。
+
+## 核心功能
+
+通过 Docker 容器运行的 stdio 类型 MCP 服务器（镜像 `hashicorp/terraform-mcp-server:0.4.0`）。
+
+- Terraform provider 和 resource 文档查询
+- HCL 配置校验
+- Terraform Cloud/Enterprise workspace 管理
+- Plan 和 Apply 操作的状态查看
+- Module 搜索
+
+## 安装与配置
+
+```
+/plugin install terraform@claude-plugins-official
+```
+
+前置条件：
+1. **Docker**——插件通过 `docker run` 启动容器，没装 Docker 就用不了
+2. **TFE_TOKEN**（可选）——如果要连 Terraform Cloud 或 Enterprise，需要设置这个环境变量：
+
+```bash
+export TFE_TOKEN="your-terraform-cloud-token"
+```
+
+不连 Terraform Cloud 的话，纯本地的文档查询和 HCL 校验不需要 token。
+
+## 典型使用场景
+
+**场景一：写 Terraform 配置时查文档**
+
+"aws_lambda_function 这个 resource 有哪些参数，runtime 支持哪些值"——不用切到浏览器翻 Registry 文档。
+
+**场景二：配置审查**
+
+"帮我看看这个 main.tf 有没有问题"——Claude 可以结合 Terraform 知识和 MCP 提供的校验能力给出具体建议。
+
+**场景三：Terraform Cloud 操作**
+
+"帮我看一下 production workspace 最近一次 plan 的状态"，或者"列出所有 workspace 及其最后 apply 时间"。
+
+## 注意事项
+
+- Docker 必须安装且正在运行。容器镜像首次拉取需要下载时间。
+- 版本锁定在 `0.4.0`，想升级需要手动改 `.mcp.json` 里的镜像 tag。
+- TFE_TOKEN 的权限范围决定了对 Terraform Cloud 的操作能力。建议用 team token 而非 user token，权限更可控。
+- 容器内没有你的本地文件系统访问权限。如果需要分析本地 `.tf` 文件，内容需要通过 Claude 传递过去，而非让 MCP 服务器直接读取。6:T4b1,{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://inferloop.dev/claude-plugins/external-services/terraform#article","headline":"6.7 Terraform","description":"HashiCorp 官方的 Terraform MCP 服务器，辅助 Infrastructure as Code 开发。查文档、校验配置、与 Terraform Cloud/Enterprise 交互。","inLanguage":"zh-CN","author":{"@type":"Person","name":"递归客"},"publisher":{"@type":"Organization","name":"InferLoop","url":"https://inferloop.dev"},"isPartOf":{"@type":"Book","name":"Claude 插件官方指南","url":"https://inferloop.dev/claude-plugins","image":"https://images.redream.cn/images/XwX564.png"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://inferloop.dev/claude-plugins/external-services/terraform"},"image":"https://images.redream.cn/images/XwX564.png"},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"首页","item":"https://inferloop.dev"},{"@type":"ListItem","position":2,"name":"Claude 插件官方指南","item":"https://inferloop.dev/claude-plugins"},{"@type":"ListItem","position":3,"name":"6.7 Terraform","item":"https://inferloop.dev/claude-plugins/external-services/terraform"}]}]}0:{"rsc":["$","$1","c",{"children":[["$","div",null,{"className":"x:mx-auto x:flex x:max-w-(--nextra-content-width)","children":["$","$L2",null,{"value":[{"value":"定位","id":"定位","depth":2},{"value":"核心功能","id":"核心功能","depth":2},{"value":"安装与配置","id":"安装与配置","depth":2},{"value":"典型使用场景","id":"典型使用场景","depth":2},{"value":"注意事项","id":"注意事项","depth":2}],"children":[["$","$L3",null,{}],["$","$L4",null,{"metadata":{"title":"6.7 Terraform","filePath":"content/claude-plugins/external-services/terraform.md","timestamp":1778089813000},"sourceCode":"$5","children":[["$","div",null,{"id":"nextra-skip-nav"}],["$","main",null,{"data-pagefind-body":true,"children":[["$","script",null,{"type":"application/ld+json","dangerouslySetInnerHTML":{"__html":"$6"}}],[["$","h1",null,{"className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-bold x:mt-2 x:text-4xl","children":["6.7 Terraform","$undefined"]}],"\n",["$","h2",null,{"id":"定位","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["定位",["$","$L7",null,{"id":"定位"}]]}],"\n",["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"HashiCorp 官方的 Terraform MCP 服务器，辅助 Infrastructure as Code 开发。查文档、校验配置、与 Terraform Cloud/Enterprise 交互。"}],"\n","$L8","\n","$L9","\n","$La","\n","$Lb","\n","$Lc","\n","$Ld","\n","$Le","\n","$Lf","\n","$L10","\n","$L11","\n","$L12","\n","$L13","\n","$L14","\n","$L15","\n","$L16","\n","$L17","\n","$L18","\n","$L19"]]}]]}]]}]}],null,"$L1a"]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"CR_c9URqh-5K47K_DC-c1"}
+8:["$","h2",null,{"id":"核心功能","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["核心功能",["$","$L7",null,{"id":"核心功能"}]]}]
+9:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["通过 Docker 容器运行的 stdio 类型 MCP 服务器（镜像 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"hashicorp/terraform-mcp-server:0.4.0"}],"）。"]}]
+a:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"Terraform provider 和 resource 文档查询"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"HCL 配置校验"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"Terraform Cloud/Enterprise workspace 管理"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"Plan 和 Apply 操作的状态查看"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"Module 搜索"}],"\n"]}]
+b:["$","h2",null,{"id":"安装与配置","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["安装与配置",["$","$L7",null,{"id":"安装与配置"}]]}]
+c:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L1b",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L1c",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":["$","span",null,{"children":"/plugin install terraform@claude-plugins-official"}]}]}]]}]]}]
+d:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"前置条件："}]
+e:["$","ol",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-decimal x:ms-6","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"Docker"}],"——插件通过 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"docker run"}]," 启动容器，没装 Docker 就用不了"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":[["$","strong",null,{"children":"TFE_TOKEN"}],"（可选）——如果要连 Terraform Cloud 或 Enterprise，需要设置这个环境变量："]}],"\n"]}]
+f:["$","div",null,{"data-pagefind-ignore":"all","className":"nextra-code x:relative x:not-first:mt-[1.25em]","children":["$undefined",["$","pre",null,{"className":"x:group x:focus-visible:nextra-focus x:overflow-x-auto x:subpixel-antialiased x:text-[.9em] x:bg-white x:dark:bg-black x:py-4 x:ring-1 x:ring-inset x:ring-gray-300 x:dark:ring-neutral-700 x:contrast-more:ring-gray-900 x:contrast-more:dark:ring-gray-50 x:contrast-more:contrast-150 x:rounded-md not-prose","tabIndex":"0","children":[["$","div",null,{"className":"x:group-hover:opacity-100 x:group-focus:opacity-100 x:opacity-0 x:transition x:focus-within:opacity-100 x:flex x:gap-1 x:absolute x:right-4 x:top-2","children":[["$","$L1b",null,{"children":["$","svg",null,{"viewBox":"0 0 24 24","fill":"currentColor","height":"1em","children":["$","path",null,{"d":"M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3l3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z"}]}]}],["$","$L1c",null,{"className":""}]]}],["$","code",null,{"className":"nextra-code","dir":"ltr","children":["$","span",null,{"children":[["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"export"}],["$","span",null,{"style":{"--shiki-light":"#24292E","--shiki-dark":"#E1E4E8"},"children":" TFE_TOKEN"}],["$","span",null,{"style":{"--shiki-light":"#D73A49","--shiki-dark":"#F97583"},"children":"="}],["$","span",null,{"style":{"--shiki-light":"#032F62","--shiki-dark":"#9ECBFF"},"children":"\"your-terraform-cloud-token\""}]]}]}]]}]]}]
+10:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"不连 Terraform Cloud 的话，纯本地的文档查询和 HCL 校验不需要 token。"}]
+11:["$","h2",null,{"id":"典型使用场景","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["典型使用场景",["$","$L7",null,{"id":"典型使用场景"}]]}]
+12:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"场景一：写 Terraform 配置时查文档"}]}]
+13:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"“aws_lambda_function 这个 resource 有哪些参数，runtime 支持哪些值”——不用切到浏览器翻 Registry 文档。"}]
+14:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"场景二：配置审查"}]}]
+15:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"“帮我看看这个 main.tf 有没有问题”——Claude 可以结合 Terraform 知识和 MCP 提供的校验能力给出具体建议。"}]
+16:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":["$","strong",null,{"children":"场景三：Terraform Cloud 操作"}]}]
+17:["$","p",null,{"className":"x:not-first:mt-[1.25em] x:leading-7","children":"“帮我看一下 production workspace 最近一次 plan 的状态”，或者”列出所有 workspace 及其最后 apply 时间”。"}]
+18:["$","h2",null,{"id":"注意事项","className":"x:tracking-tight x:text-slate-900 x:dark:text-slate-100 x:font-semibold x:target:animate-[fade-in_1.5s] x:mt-10 x:border-b x:pb-1 x:text-3xl nextra-border","children":["注意事项",["$","$L7",null,{"id":"注意事项"}]]}]
+19:["$","ul",null,{"className":"x:[:is(ol,ul)_&]:my-[.75em] x:not-first:mt-[1.25em] x:list-disc x:ms-[1.5em]","children":["\n",["$","li",null,{"className":"x:my-[.5em]","children":"Docker 必须安装且正在运行。容器镜像首次拉取需要下载时间。"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":["版本锁定在 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":"0.4.0"}],"，想升级需要手动改 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":".mcp.json"}]," 里的镜像 tag。"]}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":"TFE_TOKEN 的权限范围决定了对 Terraform Cloud 的操作能力。建议用 team token 而非 user token，权限更可控。"}],"\n",["$","li",null,{"className":"x:my-[.5em]","children":["容器内没有你的本地文件系统访问权限。如果需要分析本地 ",["$","code",null,{"className":"nextra-code","dir":"ltr","children":".tf"}]," 文件，内容需要通过 Claude 传递过去，而非让 MCP 服务器直接读取。"]}],"\n"]}]
+1a:["$","$L1d",null,{"children":["$","$1e",null,{"name":"Next.MetadataOutlet","children":"$@1f"}]}]
+1f:null

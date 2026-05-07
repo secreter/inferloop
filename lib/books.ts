@@ -31,6 +31,17 @@ export interface Book {
 
 export const BOOKS: Book[] = [
   {
+    slug: 'transformer',
+    href: '/transformer',
+    tag: 'transformer',
+    title: 'Transformer 工程实战',
+    subtitle: '从注意力机制到生产部署',
+    desc: '面向工程师的 Transformer 实战指南。从词向量、注意力机制到 HuggingFace 生态，覆盖微调、推理优化、语义搜索与 RAG 完整链路。',
+    cover: 'https://images.redream.cn/images/RWxp2p.png',
+    chapters: 13,
+    status: 'in-progress',
+  },
+  {
     slug: 'ling-agent',
     href: '/ling-agent',
     tag: 'ling-agent',
