@@ -1,4 +1,5 @@
 export default {
+  index: { title: '简介', display: 'hidden' },
   'intro-explain-code': '5 分钟，你的第一个 Skill',
   'structure-and-config': 'Skill 的结构与配置',
   'description-trigger': 'Description 的触发艺术',

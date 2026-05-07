@@ -354,9 +354,11 @@ function syncBookSections(config: BookConfig): void {
       console.log(`  [SYNC] ${sectionSlug}/${slug}`);
     }
 
+    // 加 hidden index：避免 section 自己生成的 index.md 同时作为
+    // section 文件夹标题和子章节首项出现（造成名称重复 + 双高亮）。
     fs.writeFileSync(
       path.join(targetSectionDir, '_meta.ts'),
-      generateMetaTs(chapterMetas, false),
+      generateMetaTs(chapterMetas, true),
       'utf-8'
     );
 

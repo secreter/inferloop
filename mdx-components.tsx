@@ -87,13 +87,36 @@ function SmartLink(props: AnchorHTMLAttributes<HTMLAnchorElement> & { children?:
   );
 }
 
-function ResponsiveImage(props: ImgHTMLAttributes<HTMLImageElement>) {
-  const { alt = '', loading, decoding, ...rest } = props;
+// nextra 的 remark-static-image 会把本地图片转成静态导入对象
+// （形如 { src, width, height, blurDataURL }），原生 <img> 接到对象后会
+// 把它 stringify 成 "[object Object]"。这里把对象规整为字符串 src。
+function normalizeSrc(src: unknown): string | undefined {
+  if (!src) return undefined;
+  if (typeof src === 'string') return src;
+  if (typeof src === 'object') {
+    const o = src as { src?: string; default?: { src?: string } };
+    if (typeof o.src === 'string') return o.src;
+    if (o.default && typeof o.default.src === 'string') return o.default.src;
+  }
+  return undefined;
+}
+
+type ResponsiveImageProps = Omit<ImgHTMLAttributes<HTMLImageElement>, 'src' | 'placeholder'> & {
+  src?: unknown;
+  // nextra remark-static-image 会塞进来一个 placeholder="blur"，原生 img 不识别，丢弃
+  placeholder?: string;
+};
+
+function ResponsiveImage(props: ResponsiveImageProps) {
+  const { alt = '', loading, decoding, src, placeholder: _placeholder, ...rest } = props;
+  const normalizedSrc = normalizeSrc(src);
+  if (!normalizedSrc) return null;
   return (
     <img
       alt={alt}
       loading={loading ?? 'lazy'}
       decoding={decoding ?? 'async'}
+      src={normalizedSrc}
       style={{
         maxWidth: '100%',
         height: 'auto',

@@ -49,13 +49,12 @@ main {
 
 /* ──────────────────────────────────────────────────────────────────────────
    Sidebar 扁平化：进入某书后只显示该书的章节
-   - 隐藏所有未展开的 book folder
-   - 软导航中可能短暂同时存在多个 .open，用兄弟选择器只保留第一个
+   - 用 :has(.active) 而非 .open 判断当前书：软导航中 .open 可能短暂残留在
+     上一本书，但 .active 始终跟随当前 URL，能避免旧目录残留
    - 隐藏书名按钮（顶部 menu dropdown 已是入口）
    - 把展开的章节 ul 提到顶层，去掉嵌套缩进与组指示线
    ────────────────────────────────────────────────────────────────────────── */
-aside.nextra-sidebar .nextra-scrollbar > div > ul.x\:grid > li:not(.open),
-aside.nextra-sidebar .nextra-scrollbar > div > ul.x\:grid > li.open ~ li.open {
+aside.nextra-sidebar .nextra-scrollbar > div > ul.x\:grid > li:not(.active):not(:has(.active)) {
   display: none !important;
 }
 aside.nextra-sidebar .nextra-scrollbar > div > ul.x\:grid > li.open > button {
