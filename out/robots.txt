@@ -1,7 +1,0 @@
-User-Agent: *
-Allow: /
-Disallow: /_next/
-Disallow: /api/
-
-Host: https://inferloop.dev
-Sitemap: https://inferloop.dev/sitemap.xml
