@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "next dev --webpack",
     "sync": "tsx scripts/sync-from-books.ts",
-    "build": "npm run sync && NEXT_WEBPACK_MAX_WORKERS=1 NODE_OPTIONS=--max-old-space-size=3072 next build",
+    "build": "npm run sync && NEXT_WEBPACK_MAX_WORKERS=1 NODE_OPTIONS=--max-old-space-size=3072 next build && pagefind --site out --output-subdir _pagefind",
     "start": "next start",
     "export": "npm run build",
     "postinstall": "patch-package"
@@ -25,6 +25,7 @@
     "@resvg/resvg-js": "^2.6.2",
     "@types/node": "25.6.0",
     "@types/react": "19.2.14",
+    "pagefind": "^1.5.2",
     "patch-package": "^8.0.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
