@@ -1,6 +1,9 @@
 
 ## Seq2Seq 的瓶颈
 
+![Encoder 中的 tensor 传递](/books/transformer/attention/encoder_with_tensors.png)
+*图片来源：[The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/) by Jay Alammar*
+
 在 Attention 出现之前，序列到序列（Seq2Seq）任务——比如机器翻译——用的是 Encoder-Decoder 结构。Encoder 是一个 RNN，逐步读入源语言的每个词，最终把整个句子的信息压缩进最后一个隐藏状态向量 `h_n`。Decoder 是另一个 RNN 从这个向量出发，逐词生成目标语言。
 
 问题在那个压缩步骤上。不管源句子有多长，最终都要塞进一个固定维度的向量。对于短句子，这勉强够用；对于长句子，信息丢失严重——早期输入的词的信息在 RNN 的反复传递中被稀释，到最后几乎消失。
@@ -45,6 +48,9 @@ Key: "坐下" → Value: "关于坐下动作的信息"
 
 Q 和 K 用来计算相似度，决定注意力权重；V 是被加权求和的实际内容。Q 和 K 的维度必须相同（因为要做点积），V 的维度可以不同（通常和 K 相同）。
 
+![Q、K、V 向量计算示意](/books/transformer/attention/transformer_self_attention_vectors.png)
+*图片来源：[The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/) by Jay Alammar*
+
 Q、K、V 三个矩阵是从同一个输入 X 经过三个不同的线性变换得到的：
 
 ```
@@ -69,6 +75,9 @@ Attention(Q, K, V) = softmax( Q · K^T / √d_k ) · V
 
 计算每个 Query 和所有 Key 的相似度。结果是一个 `[seq_len, seq_len]` 的矩阵，每个元素 `(i, j)` 表示位置 `i` 的 Query 和位置 `j` 的 Key 的相似度得分。点积越大，说明两者越"匹配"。
 
+![注意力得分计算](/books/transformer/attention/transformer_self_attention_score.png)
+*图片来源：[The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/) by Jay Alammar*
+
 **第二步：除以 √d_k**
 
 缩放步骤，单独一节讲。
@@ -77,9 +86,15 @@ Attention(Q, K, V) = softmax( Q · K^T / √d_k ) · V
 
 把得分矩阵的每一行转成概率分布（每行和为 1）。这就是注意力权重：对于序列中的每个位置，它对其他所有位置的"关注程度"。
 
+![Softmax 归一化注意力权重](/books/transformer/attention/self-attention_softmax.png)
+*图片来源：[The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/) by Jay Alammar*
+
 **第四步：乘以 V**
 
 用注意力权重对 V 做加权求和。结果是 `[seq_len, d_v]`，每个位置都得到了一个融合了全序列上下文的新表示。
+
+![加权求和输出](/books/transformer/attention/self-attention-output.png)
+*图片来源：[The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/) by Jay Alammar*
 
 用数字串联一遍：设 `seq_len=4, d_k=8`。
 
@@ -104,6 +119,12 @@ Attention(Q, K, V) = softmax( Q · K^T / √d_k ) · V
 ## 矩阵形式的 Attention
 
 实际实现中，不会一次处理一个 Query，而是把整个序列的 Q、K、V 同时送进去，用矩阵乘法一次算出所有位置的 Attention，充分利用 GPU 的并行计算能力。
+
+![矩阵形式 Attention 计算（步骤一）](/books/transformer/attention/self-attention-matrix-calculation.png)
+*图片来源：[The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/) by Jay Alammar*
+
+![矩阵形式 Attention 计算（步骤二）](/books/transformer/attention/self-attention-matrix-calculation-2.png)
+*图片来源：[The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/) by Jay Alammar*
 
 ```python
 import torch

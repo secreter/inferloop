@@ -16,6 +16,7 @@ import * as path from 'path';
 
 const WORKSPACE = path.resolve(__dirname, '../../');
 const CONTENT_DIR = path.resolve(__dirname, '../content');
+const PUBLIC_DIR = path.resolve(__dirname, '../public');
 
 interface BookConfig {
   sourceDir: string;
@@ -173,6 +174,22 @@ function processMarkdown(content: string): string {
   return removeFrontmatter(content);
 }
 
+function rewriteAssetPaths(content: string, publicBase: string): string {
+  return content.replace(/!\[([^\]]*)\]\(assets\/([^)]+)\)/g, (_, alt, filename) => {
+    return `![${alt}](${publicBase}/${filename})`;
+  });
+}
+
+function copyDir(src: string, dest: string): void {
+  if (!fs.existsSync(src)) return;
+  fs.mkdirSync(dest, { recursive: true });
+  for (const f of fs.readdirSync(src, { withFileTypes: true })) {
+    if (f.isFile()) {
+      fs.copyFileSync(path.join(src, f.name), path.join(dest, f.name));
+    }
+  }
+}
+
 // "ch01-overview" → "overview"，"01-cognition" → "cognition"，"chapter-01" → "chapter-01"（不变）
 function stripNumericPrefix(slug: string): string {
   const stripped = slug.replace(/^(ch\d+|\d+)-/, '');
@@ -259,7 +276,13 @@ function syncBookFlat(config: BookConfig): void {
       const mdContent = fs.readFileSync(readmePath, 'utf-8');
       const slug = stripNumericPrefix(name);
       const title = normalizeChapterTitle(extractTitleFromContent(mdContent) || slug);
-      const processed = processMarkdown(mdContent);
+      let processed = processMarkdown(mdContent);
+      const assetsDir = path.join(fullPath, 'assets');
+      if (fs.existsSync(assetsDir)) {
+        const publicBase = `/books/${config.targetDir}/${slug}`;
+        copyDir(assetsDir, path.join(PUBLIC_DIR, 'books', config.targetDir, slug));
+        processed = rewriteAssetPaths(processed, publicBase);
+      }
       fs.writeFileSync(path.join(targetBase, `${slug}.md`), processed, 'utf-8');
       chapters.push({ slug, title });
       console.log(`  [SYNC] ${slug}`);
@@ -279,11 +302,14 @@ function syncBookFlat(config: BookConfig): void {
     let mdContent: string | null = null;
     let slug = '';
 
+    let assetsSourceDir: string | null = null;
+
     if (entry.isDirectory() && config.chapterPattern.test(entry.name)) {
       const readmePath = path.join(chaptersDir, entry.name, 'README.md');
       if (fs.existsSync(readmePath)) {
         mdContent = fs.readFileSync(readmePath, 'utf-8');
         slug = stripNumericPrefix(entry.name);
+        assetsSourceDir = path.join(chaptersDir, entry.name, 'assets');
       }
     } else if (entry.isFile() && entry.name.endsWith('.md') && config.chapterPattern.test(entry.name)) {
       mdContent = fs.readFileSync(path.join(chaptersDir, entry.name), 'utf-8');
@@ -292,7 +318,12 @@ function syncBookFlat(config: BookConfig): void {
 
     if (mdContent && slug) {
       const title = normalizeChapterTitle(extractTitleFromContent(mdContent) || slug);
-      const processed = processMarkdown(mdContent);
+      let processed = processMarkdown(mdContent);
+      if (assetsSourceDir && fs.existsSync(assetsSourceDir)) {
+        const publicBase = `/books/${config.targetDir}/${slug}`;
+        copyDir(assetsSourceDir, path.join(PUBLIC_DIR, 'books', config.targetDir, slug));
+        processed = rewriteAssetPaths(processed, publicBase);
+      }
       fs.writeFileSync(path.join(targetBase, `${slug}.md`), processed, 'utf-8');
       chapters.push({ slug, title });
       console.log(`  [SYNC] ${slug}`);

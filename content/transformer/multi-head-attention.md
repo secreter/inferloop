@@ -17,6 +17,9 @@ Multi-Head Attention 的核心思路：与其在 512 维的完整空间里做一
 
 每个"头"有自己独立的投影矩阵 `W_i^Q`、`W_i^K`、`W_i^V`，维度都是 `(d_model, d_k)`。这意味着每个头会从不同的角度去看同一个输入。训练结束后，不同头自然分化出不同的"关注模式"——这是优化过程的涌现，而不是人为规定的。
 
+![多头 Q、K、V 投影示意](/books/transformer/multi-head-attention/transformer_attention_heads_qkv.png)
+*图片来源：[The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/) by Jay Alammar*
+
 设计要点：
 
 - `h` 个头并行计算，不是串行，训练时效率没有损失
@@ -57,6 +60,9 @@ MultiHead = Concat(head_1, head_2, ..., head_h)
 
 拼接后维度为 `(batch, seq_len, h * d_v)`。
 
+![多头输出拼接](/books/transformer/multi-head-attention/transformer_attention_heads_z.png)
+*图片来源：[The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/) by Jay Alammar*
+
 **第四步：输出投影**
 
 用 `W^O ∈ R^(h*d_v × d_model)` 做一次线性变换，把维度映射回 `d_model`：
@@ -64,6 +70,9 @@ MultiHead = Concat(head_1, head_2, ..., head_h)
 ```
 MultiHead = Concat(head_1, ..., head_h) W^O
 ```
+
+![输出投影矩阵 W^O](/books/transformer/multi-head-attention/transformer_attention_heads_weight_matrix_o.png)
+*图片来源：[The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/) by Jay Alammar*
 
 整个计算流程如下：
 
@@ -86,6 +95,9 @@ MultiHead = Concat(head_1, ..., head_h) W^O
       ↓
 最终输出: (batch, seq_len, d_model)
 ```
+
+![Multi-Head Attention 完整流程总览](/books/transformer/multi-head-attention/transformer_multi-headed_self-attention-recap.png)
+*图片来源：[The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/) by Jay Alammar*
 
 实现时，通常不用真的创建 `h` 个独立的矩阵，而是用一个大矩阵 `W^Q ∈ R^(d_model × d_model)` 一次性投影，再 reshape 成 `(batch, h, seq_len, d_k)` 的形式，然后并行计算所有头的 Attention。这样实现更简洁，也更容易利用矩阵乘法的批处理能力。
 
@@ -118,7 +130,15 @@ print(total_params)  # 1,049,600 ≈ 4 × 512 × 512 + 512 + 512
 
 ## 不同头学到什么
 
-不同头究竟学到什么，是一个可以实验验证的问题。Clark et al.（2019）在 BERT 上对注意力头做了系统分析，几个典型发现：
+不同头究竟学到什么，是一个可以实验验证的问题。
+
+![不同注意力头关注的位置（示例一）](/books/transformer/multi-head-attention/transformer_self-attention_visualization_2.png)
+*图片来源：[The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/) by Jay Alammar*
+
+![不同注意力头关注的位置（示例二）](/books/transformer/multi-head-attention/transformer_self-attention_visualization_3.png)
+*图片来源：[The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/) by Jay Alammar*
+
+Clark et al.（2019）在 BERT 上对注意力头做了系统分析，几个典型发现：
 
 **句法头**：某些头倾向于关注句法上的直接依存关系（如主语-谓语、动词-宾语）。给一个句子，这类头的注意力权重分布和依存分析树的边高度吻合。
 
