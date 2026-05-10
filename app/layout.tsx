@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import Link from 'next/link';
 import Script from 'next/script';
+import { Suspense } from 'react';
 import { Footer, Layout, Navbar } from 'nextra-theme-docs';
 import { Head, Search } from 'nextra/components';
 import { GitHubIcon } from 'nextra/icons';
@@ -8,8 +9,10 @@ import { getPageMap } from 'nextra/page-map';
 import 'nextra-theme-docs/style.css';
 import './globals.css';
 import { BOOKS } from '@/lib/books';
+import { GoogleAnalyticsEvents, GoogleAnalyticsPageView } from '@/components/google-analytics';
 
 const CF_ANALYTICS_TOKEN = process.env.NEXT_PUBLIC_CF_ANALYTICS_TOKEN;
+const GA_MEASUREMENT_ID = 'G-VSR6HNJK82';
 
 const SITE_URL = 'https://inferloop.dev';
 const SITE_NAME = 'InferLoop';
@@ -230,6 +233,27 @@ export default async function RootLayout({
             data-cf-beacon={JSON.stringify({ token: CF_ANALYTICS_TOKEN })}
           />
         )}
+        <Script
+          id="ga4-loader"
+          strategy="afterInteractive"
+          src={`https://www.googletagmanager.com/gtag/js?id=${GA_MEASUREMENT_ID}`}
+        />
+        <Script id="ga4-init" strategy="afterInteractive">
+          {`
+            window.dataLayer = window.dataLayer || [];
+            function gtag(){dataLayer.push(arguments);}
+            window.gtag = gtag;
+            gtag('js', new Date());
+            gtag('config', '${GA_MEASUREMENT_ID}', {
+              send_page_view: false,
+              anonymize_ip: true,
+            });
+          `}
+        </Script>
+        <Suspense fallback={null}>
+          <GoogleAnalyticsPageView measurementId={GA_MEASUREMENT_ID} />
+        </Suspense>
+        <GoogleAnalyticsEvents />
         <Layout
           navbar={navbar}
           pageMap={pageMap}
