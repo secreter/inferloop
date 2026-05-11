@@ -1,6 +1,6 @@
 export default {
   index: { title: '简介', display: 'hidden' },
-  'preface': '前言 · 先看最终效果',
+  'preface': { title: '前言 · 先看最终效果', display: 'hidden' },
   'first-agent': '50 行代码，你的第一个 Agent',
   'multi-provider': '多模型适配——一套代码跑通三家 LLM',
   'tool-system': '工具系统——给 Agent 装上瑞士军刀',

@@ -1,6 +1,6 @@
 export default {
   index: { title: '简介', display: 'hidden' },
-  'preface': 'Preface',
+  'preface': { title: 'Preface', display: 'hidden' },
   'dev-tools': 'Dev Tools',
   'code-quality': 'Code Quality',
   'output-style': 'Output Style',

@@ -1,6 +1,6 @@
 export default {
   index: { title: '简介', display: 'hidden' },
-  'preface': '前言 — 为什么要读一个 Agent 项目的源码',
+  'preface': { title: '前言 — 为什么要读一个 Agent 项目的源码', display: 'hidden' },
   'overview': 'OpenClaw 全景：从 Clawdbot 到 350K Stars',
   'project-structure': '项目工程结构：Monorepo、模块划分与构建体系',
   'quickstart': '快速上手：本地部署你的第一个 Agent',

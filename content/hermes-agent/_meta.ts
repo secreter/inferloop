@@ -1,6 +1,6 @@
 export default {
   index: { title: '简介', display: 'hidden' },
-  'preface': '前言',
+  'preface': { title: '前言', display: 'hidden' },
   'chatbot-to-agent': '从 Chatbot 到 Agent:一条尚未走完的路',
   'quickstart': '10 分钟跑通你的第一个 Hermes',
   'memory-system': '记忆系统:从 Chat History 到分层知识',

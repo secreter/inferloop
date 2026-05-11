@@ -28,6 +28,10 @@ interface BookConfig {
   // recursive: 三层结构，section-dir/chapter-dir/README.md
   // 只递归进匹配 chapterPattern 但无 README.md 的目录（section 层）
   recursive?: boolean;
+  // prefacePath: 书的前言文件，相对 sourceDir 的路径。
+  // 如果设置且文件存在，前言内容会覆盖 index.md（替代 indexContent），
+  // 让"点击书封面 → 进入根目录"直接看到前言而不是几句空泛简介。
+  prefacePath?: string;
 }
 
 const BOOKS: BookConfig[] = [
@@ -36,22 +40,10 @@ const BOOKS: BookConfig[] = [
     targetDir: 'llm-infra',
     chaptersPath: 'chapters',
     chapterPattern: /^ch\d+-/,
+    prefacePath: 'chapters/preface/README.md',
     indexContent: `# LLM Infra 工程实战
 
 面向应用层工程师的 LLM 基础设施系统化学习书籍。
-
-## 这本书解决什么问题
-
-你是一个有经验的后端/全栈工程师，日常调用 OpenAI API 没问题，但想深入理解模型推理、量化、微调、分布式训练和生产部署背后的工程细节。
-
-这本书从零开始，用工程师能理解的方式讲清楚这些问题。
-
-## 前置要求
-
-- 会 Python（不需要精通，会读写就行）
-- 了解基本的 HTTP/API 概念
-- 有 Linux 命令行经验
-- 不需要机器学习背景，书里会从头讲
 `,
   },
   {
@@ -59,11 +51,10 @@ const BOOKS: BookConfig[] = [
     targetDir: 'hermes-agent',
     chaptersPath: 'book',
     chapterPattern: /^\d+-/,
+    prefacePath: 'book/00-preface.md',
     indexContent: `# Hermes Agent 源码解读
 
 解剖式技术书 — 帮助工程师快速理解 Agent 架构设计。
-
-通过逐层拆解 Hermes Agent 的源码，掌握 Agent 运行时、Skill 系统、消息网关的核心实现。
 `,
   },
   {
@@ -71,11 +62,10 @@ const BOOKS: BookConfig[] = [
     targetDir: 'openclaw',
     chaptersPath: 'chapters',
     chapterPattern: /^ch\d+-/,
+    prefacePath: 'chapters/ch00-preface/README.md',
     indexContent: `# OpenClaw 源码解析
 
 现代 Agent 系统的架构设计与工程实践。
-
-本书正在编写中，持续更新。
 `,
   },
   {
@@ -84,6 +74,7 @@ const BOOKS: BookConfig[] = [
     chaptersPath: 'book',
     chapterPattern: /^\d{2}-/,
     sections: true,
+    prefacePath: 'book/00-preface.md',
     indexContent: `# Claude Code Skill 开发指南
 
 掌握 Claude Code Skill 开发，构建可复用的 AI 工程能力模块。
@@ -95,6 +86,7 @@ const BOOKS: BookConfig[] = [
     chaptersPath: '.',
     chapterPattern: /^\d{2}-/,
     sections: true,
+    prefacePath: '00-preface/01-intro.md',
     indexContent: `# Claude 插件官方指南
 
 从开发工具到专业领域，系统掌握 Claude 插件生态。
@@ -105,11 +97,10 @@ const BOOKS: BookConfig[] = [
     targetDir: 'ling-agent',
     chaptersPath: 'book',
     chapterPattern: /^\d+-/,
+    prefacePath: 'book/00-preface/README.md',
     indexContent: `# 自己动手写 AI Agent
 
 从 Claude Code 开源架构到你的第一个编程助手。
-
-全书以 Ling（灵）这个从零构建的 AI 编程助手为主线，覆盖 Agent 运行时、工具系统、MCP 协议、多 Agent 协作等核心主题。
 `,
   },
   {
@@ -117,11 +108,10 @@ const BOOKS: BookConfig[] = [
     targetDir: 'repox',
     chaptersPath: 'docs',
     chapterPattern: /^chapter-\d+/,
+    prefacePath: 'docs/preface.md',
     indexContent: `# AI 时代的 CLI 工具开发实战
 
 以 repox 这个 AI 驱动的仓库助手为案例，系统讲解如何用 TypeScript 构建一个现代 CLI 工具。
-
-涵盖命令设计、插件系统、AI 集成、GitHub OAuth、发布与分发等完整工程链路。
 `,
   },
   {
@@ -130,11 +120,10 @@ const BOOKS: BookConfig[] = [
     chaptersPath: '.',
     chapterPattern: /^(ch\d+|\d{2})-/,
     recursive: true,
+    prefacePath: '00-preface/README.md',
     indexContent: `# Agent Memory 工程实战
 
 从 claude-mem 源码到企业级记忆平台。
-
-深入解析 Agent 记忆系统的工程实现：Hook 生命周期、Worker 服务、MCP Search、渐进式披露机制，以及从单机到企业级的演进路径。
 `,
   },
   {
@@ -142,11 +131,10 @@ const BOOKS: BookConfig[] = [
     targetDir: 'transformer',
     chaptersPath: '.',
     chapterPattern: /^\d+-/,
+    prefacePath: 'preface/README.md',
     indexContent: `# Transformer 工程实战
 
 面向有工程背景、希望转型 AI 方向的工程师。
-
-从词向量到注意力机制，从 Transformer 架构到 HuggingFace 实战，再到微调、推理、RAG，用工程师的方式讲清楚 AI 基础设施的核心原理。
 `,
   },
 ];
@@ -210,17 +198,36 @@ function dirToTitle(dirName: string): string {
 }
 
 function generateMetaTs(
-  entries: Array<{ slug: string; title: string }>,
+  entries: Array<{ slug: string; title: string; hidden?: boolean }>,
   withIndex = true
 ): string {
   const lines = ["export default {"];
   if (withIndex) lines.push("  index: { title: '简介', display: 'hidden' },");
   for (const e of entries) {
     const escaped = e.title.replace(/'/g, "\\'");
-    lines.push(`  '${e.slug}': '${escaped}',`);
+    if (e.hidden) {
+      lines.push(`  '${e.slug}': { title: '${escaped}', display: 'hidden' },`);
+    } else {
+      lines.push(`  '${e.slug}': '${escaped}',`);
+    }
   }
   lines.push('};\n');
   return lines.join('\n');
+}
+
+// 读取 sourceDir 下的前言文件，剥掉 frontmatter，并保证开头有 h1 让站点页面标题正确。
+// 找不到返回 null。
+function readPreface(sourceBase: string, prefacePath?: string): string | null {
+  if (!prefacePath) return null;
+  const full = path.join(sourceBase, prefacePath);
+  if (!fs.existsSync(full)) return null;
+  const raw = fs.readFileSync(full, 'utf-8');
+  const body = processMarkdown(raw).replace(/^\s+/, '');
+  // 前言没有 h1 时补一个，避免站点 <title> 退化为 "Index"
+  if (!/^#\s/m.test(body.split('\n')[0] || '')) {
+    return `# 前言\n\n${body}`;
+  }
+  return body;
 }
 
 // 递归收集所有章节目录（匹配 pattern 且有 README.md）
@@ -259,7 +266,13 @@ function syncBookFlat(config: BookConfig): void {
   }
 
   fs.mkdirSync(targetBase, { recursive: true });
-  fs.writeFileSync(path.join(targetBase, 'index.md'), config.indexContent, 'utf-8');
+
+  // 解析前言：有前言时用前言内容覆盖 index.md（书的根目录），
+  // 让"点击书封面 → 进入根目录"直接看到前言。
+  const prefaceContent = readPreface(sourceBase, config.prefacePath);
+  const indexBody = prefaceContent ?? config.indexContent;
+  fs.writeFileSync(path.join(targetBase, 'index.md'), indexBody, 'utf-8');
+  if (prefaceContent) console.log(`  [PREFACE] index.md ← ${config.prefacePath}`);
 
   const chaptersDir = path.join(sourceBase, config.chaptersPath);
   if (!fs.existsSync(chaptersDir)) {
@@ -270,7 +283,7 @@ function syncBookFlat(config: BookConfig): void {
   // recursive 模式：跨多层收集章节目录
   if (config.recursive) {
     const chapterDirs = collectChapterDirs(chaptersDir, config.chapterPattern);
-    const chapters: Array<{ slug: string; title: string }> = [];
+    const chapters: Array<{ slug: string; title: string; hidden?: boolean }> = [];
     for (const { fullPath, name } of chapterDirs) {
       const readmePath = path.join(fullPath, 'README.md');
       const mdContent = fs.readFileSync(readmePath, 'utf-8');
@@ -284,8 +297,10 @@ function syncBookFlat(config: BookConfig): void {
         processed = rewriteAssetPaths(processed, publicBase);
       }
       fs.writeFileSync(path.join(targetBase, `${slug}.md`), processed, 'utf-8');
-      chapters.push({ slug, title });
-      console.log(`  [SYNC] ${slug}`);
+      // 前言已合并到 index.md，从侧边栏隐藏，避免根目录与"前言"重复入口
+      const hidden = prefaceContent != null && slug === 'preface';
+      chapters.push({ slug, title, hidden });
+      console.log(`  [SYNC] ${slug}${hidden ? ' (hidden in sidebar)' : ''}`);
     }
     fs.writeFileSync(path.join(targetBase, '_meta.ts'), generateMetaTs(chapters), 'utf-8');
     console.log(`  [META] _meta.ts (${chapters.length} chapters)`);
@@ -294,7 +309,7 @@ function syncBookFlat(config: BookConfig): void {
 
   const entries = fs.readdirSync(chaptersDir, { withFileTypes: true })
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-  const chapters: Array<{ slug: string; title: string }> = [];
+  const chapters: Array<{ slug: string; title: string; hidden?: boolean }> = [];
 
   for (const entry of entries) {
     if (entry.name.startsWith('.') || entry.name.startsWith('_')) continue;
@@ -325,8 +340,10 @@ function syncBookFlat(config: BookConfig): void {
         processed = rewriteAssetPaths(processed, publicBase);
       }
       fs.writeFileSync(path.join(targetBase, `${slug}.md`), processed, 'utf-8');
-      chapters.push({ slug, title });
-      console.log(`  [SYNC] ${slug}`);
+      // 前言已合并到 index.md，从侧边栏隐藏，避免根目录与"前言"重复入口
+      const hidden = prefaceContent != null && slug === 'preface';
+      chapters.push({ slug, title, hidden });
+      console.log(`  [SYNC] ${slug}${hidden ? ' (hidden in sidebar)' : ''}`);
     }
   }
 
@@ -346,7 +363,12 @@ function syncBookSections(config: BookConfig): void {
   }
 
   fs.mkdirSync(targetBase, { recursive: true });
-  fs.writeFileSync(path.join(targetBase, 'index.md'), config.indexContent, 'utf-8');
+
+  // 前言：用前言内容覆盖 index.md，让点击书封面直接看到前言
+  const prefaceContent = readPreface(sourceBase, config.prefacePath);
+  const indexBody = prefaceContent ?? config.indexContent;
+  fs.writeFileSync(path.join(targetBase, 'index.md'), indexBody, 'utf-8');
+  if (prefaceContent) console.log(`  [PREFACE] index.md ← ${config.prefacePath}`);
 
   const chaptersDir = path.join(sourceBase, config.chaptersPath);
   if (!fs.existsSync(chaptersDir)) {
@@ -358,7 +380,7 @@ function syncBookSections(config: BookConfig): void {
     .filter(e => e.isDirectory() && config.chapterPattern.test(e.name))
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 
-  const topSections: Array<{ slug: string; title: string }> = [];
+  const topSections: Array<{ slug: string; title: string; hidden?: boolean }> = [];
 
   for (const section of sectionEntries) {
     const sectionTitle = dirToTitle(section.name);
@@ -393,7 +415,9 @@ function syncBookSections(config: BookConfig): void {
       'utf-8'
     );
 
-    topSections.push({ slug: sectionSlug, title: sectionTitle });
+    // 前言 section 已合并到 index.md，从侧边栏隐藏
+    const hidden = prefaceContent != null && sectionSlug === 'preface';
+    topSections.push({ slug: sectionSlug, title: sectionTitle, hidden });
   }
 
   fs.writeFileSync(path.join(targetBase, '_meta.ts'), generateMetaTs(topSections), 'utf-8');

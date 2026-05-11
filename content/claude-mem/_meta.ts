@@ -1,6 +1,6 @@
 export default {
   index: { title: '简介', display: 'hidden' },
-  'preface': '前言',
+  'preface': { title: '前言', display: 'hidden' },
   'problem-domain': 'Agent Memory 问题域',
   'claude-mem-intro': '认识 claude-mem — 能力全景与快速上手',
   'context-engineering': 'Context Engineering 基础',
